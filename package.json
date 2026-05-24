@@ -1,0 +1,24 @@
+{
+  "name": "the-royal-gambit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "friend": "npm run build && node server.js",
+    "serve": "node server.js"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "chess.js": "^1.4.0",
+    "express": "^4.19.2",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vite": "^6.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {}
+}
