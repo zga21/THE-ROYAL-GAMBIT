@@ -1,23 +1,91 @@
 # The Royal Gambit
 
-**The Royal Gambit** is a browser-based chess variant that combines classical chess with a blackjack-style recovery mechanic. The project is built as a React + Vite web app and uses `chess.js` for legal chess move validation. It also includes a local Express/WebSocket server so two players can share a room and play from separate devices on the same network.
+**The Royal Gambit** is a browser-based chess variant that combines classical chess with a blackjack-style recovery system. It keeps the foundation of legal chess, then adds a risk/reward layer where a player who falls behind can gamble to recover captured material.
 
-This is not just a standard chessboard. The game experiments with risk, recovery, material imbalance, and strategic gambling. When a player falls behind, they can use a limited blackjack challenge to try to recover captured pieces by staking equivalent material.
+The project is built with **React + Vite**, uses **chess.js** for legal chess rules, includes a custom blackjack engine, uses **Monte Carlo simulation** to estimate blackjack odds for bot decisions, and supports local friend-room multiplayer through an **Express + WebSocket** server.
 
-## Current Status
+> This is not just a chess skin. The core idea is a new chess variant: material loss can create a comeback path, but only if the player is willing to risk active pieces.
 
-The project currently includes:
+---
 
-- A playable chess interface.
-- Classical move legality through `chess.js`.
-- Custom blackjack challenge rules.
-- Piece staking and recovery logic.
-- King-gamble cooldown behaviour.
-- Bot play with rating-based difficulty profiles.
-- Friend-room multiplayer over WebSockets.
-- Shareable game-state URLs.
-- Three visual themes: Royal, Pink & White, and Orange & Black.
-- A responsive UI with a right-side control/status panel.
+## Screenshot / Media Guide
+
+Create this folder before adding images:
+
+```text
+docs/images/
+```
+
+Then add the images below and replace the placeholders with the real screenshots.
+
+### 1. Main Gameplay View
+
+> **Add image here:** full board screenshot showing the Royal theme, right-side status panel, material values, and turn indicator.
+
+```md
+![Main gameplay view](docs/images/main-gameplay-royal.png)
+```
+
+### 2. Blackjack Recovery Panel
+
+> **Add image here:** screenshot where a player is behind by 5+ material and the Blackjack Recovery panel is active. Show captured pieces, stake selection, and the Start Challenge button.
+
+```md
+![Blackjack recovery panel](docs/images/blackjack-recovery-panel.png)
+```
+
+### 3. Blackjack Table / Card Round
+
+> **Add image here:** screenshot of the blackjack card table during a challenge, ideally showing player cards, dealer cards, Hit/Stand buttons, and the recovery/stake context.
+
+```md
+![Blackjack card round](docs/images/blackjack-card-round.png)
+```
+
+### 4. Theme Comparison
+
+> **Add image here:** one combined image or three small screenshots showing Royal, Pink & White, and Orange & Black themes.
+
+```md
+![Theme comparison](docs/images/theme-comparison.png)
+```
+
+### 5. Friend Mode / Multiplayer Link
+
+> **Add image here:** screenshot showing friend mode with a generated room link, connection status, and player assignment.
+
+```md
+![Friend mode room link](docs/images/friend-mode-room-link.png)
+```
+
+### 6. Bot Difficulty Selection
+
+> **Add image here:** screenshot showing bot mode with the rating selector and active bot strength.
+
+```md
+![Bot difficulty selection](docs/images/bot-difficulty-selection.png)
+```
+
+---
+
+## Current Features
+
+- Playable chess interface with standard move legality.
+- Custom piece-state tracking for captured pieces, promoted pieces, original squares, and recovery logic.
+- Blackjack recovery system for players who are behind in material.
+- Stake matching system: recovered material must be matched by active staked material.
+- Safety checks preventing illegal staking that exposes the king.
+- Special lone-king / king-gamble behaviour.
+- Bot mode with multiple strength levels.
+- Bot decision-making across both chess moves and blackjack recovery options.
+- Monte Carlo blackjack odds simulation used by bot expected-value calculations.
+- Friend mode using local WebSocket rooms.
+- Shareable room links and game-state sync.
+- Three themes: Royal, Pink & White, and Orange & Black.
+- Separated board and side-panel components.
+- Basic Node test command configured through `npm test`.
+
+---
 
 ## Tech Stack
 
@@ -27,59 +95,147 @@ The project currently includes:
 | Build Tool | Vite 6 |
 | Chess Rules | chess.js |
 | Icons | lucide-react |
-| Local Multiplayer Server | Express + ws |
+| Local Server | Express |
+| Multiplayer Sync | ws / WebSockets |
+| Tests | Node test runner |
 | Language | JavaScript / JSX / CSS |
 
-## How the Game Works
+---
 
-### 1. Normal Chess Foundation
+## Game Concept
 
-The board starts from a standard chess position. Legal moves, check, checkmate, stalemate, draw detection, castling, promotion, and turn handling are managed through `chess.js`.
+Normal chess has a brutal property: once you lose too much material, the game often becomes strategically dead. **The Royal Gambit** changes that.
 
-The app keeps its own piece model alongside the chess engine. This allows the game to track extra information that normal chess does not need, such as:
+When a player is behind by enough material, they can attempt a blackjack challenge. If they win, they recover captured material. If they lose, they sacrifice the staked material and give the opponent even more advantage.
 
-- Original piece type.
-- Original square.
-- Captured state.
-- Promotion state.
-- Custom recovery eligibility.
-- Staked pieces during blackjack challenges.
+The result is a hybrid strategy game:
 
-### 2. Blackjack Recovery Mechanic
+```text
+Chess position + material imbalance + blackjack odds + stake risk = decision pressure
+```
 
-The main variant mechanic is the blackjack challenge.
+The best move is not always a chess move. Sometimes the best move is to gamble. Sometimes gambling is bait. That is the central tension of the project.
 
-A player can attempt a blackjack recovery only when the rules allow it. The current implementation requires conditions such as:
+---
 
-- The game must be active.
-- The player must be the side to move.
-- The player must not currently be in check.
-- The player must be behind by enough material.
+## How the Rules Work
+
+### 1. Chess Foundation
+
+The chess layer uses `chess.js` for legal move generation and game-state validation. The app handles normal chess concepts including:
+
+- Legal moves.
+- Captures.
+- Check.
+- Checkmate.
+- Stalemate.
+- Draw states.
+- Castling.
+- Promotion.
+- Turn control.
+
+The app also maintains its own custom piece model so it can track information that normal chess engines do not need, such as original square, original type, captured status, and recovery eligibility.
+
+### 2. Blackjack Recovery
+
+A player can normally start a blackjack recovery challenge only when the rules allow it. The key conditions are:
+
+- The game must still be active.
+- It must be that player's turn.
+- The player must not be in check.
+- The player must be behind by at least 5 material.
 - The player must have recoverable captured pieces.
-- The original recovery square must be empty.
-- The player must stake active material equal to the recovery value.
-- The stake must not illegally expose the king.
-- Normal blackjack usage must remain within the per-player limit.
+- The recovery square must be empty.
+- The player must stake active material against the recovery.
+- The stake must be legal and must not expose the king.
+- The player must still have blackjack attempts remaining.
 
 The default normal blackjack limit is currently **5 attempts per player**.
 
-### 3. Staking Rules
+### 3. Stake Matching
 
-To recover a captured piece, the player must stake active pieces with matching material value. For example, recovering a rook requires a stake value of 5.
+The recovery system is not free. To recover captured material, the player must stake active pieces.
 
-The project includes safety checks so a player cannot stake a piece if removing that piece would expose their own king to check.
+Example:
 
-### 4. King Gamble / Lone King Logic
+```text
+Recovering a rook = recovery value 5
+Required stake = active material worth 5
+```
 
-The project includes special logic for king-related gambling states. The app tracks loss streaks, cooldown status, and whether the king must move from a required square before gambling can resume.
+A player could stake a rook, or a bishop + knight + pawn-style combination if the values match the logic used by the app.
 
-This is one of the more experimental areas of the game design and should be treated carefully when expanding the rule system.
+### 4. Stake Safety
 
-### 5. Bot Mode
+The app checks whether staking a piece would expose the player's king. If removing the piece would leave the king in check, that piece cannot be used as a stake.
 
-The game includes bot play with multiple rating labels, from beginner levels to elite-style difficulty labels.
+This prevents cheap or illegal sacrifice loops where pinned pieces are gambled away even though they are still needed for king safety.
 
-The bot is not a Stockfish engine. It is a custom heuristic bot that evaluates moves using practical signals such as:
+### 5. Lone-King / King Gamble
+
+The project includes special logic for lone-king situations. In this mode, the king itself becomes part of the recovery drama. The app tracks:
+
+- Loss streaks.
+- Cooldown state.
+- Whether the king must move before another blackjack attempt.
+- Recovery points in king-gamble flow.
+
+This is one of the most distinctive mechanics in the project, but it is also one of the most dangerous from a balancing perspective. It needs careful playtesting.
+
+---
+
+## Monte Carlo Blackjack Simulation
+
+The project includes a Monte Carlo simulation system for blackjack odds.
+
+The flow is:
+
+```text
+blackjackSim.js
+    ↓
+blackjackMonteCarlo.js
+    ↓
+blackjackOdds.js
+    ↓
+evaluateBlackjackOption.js
+    ↓
+chooseBotAction.js
+```
+
+### What it does
+
+`blackjackMonteCarlo.js` runs many simulated blackjack rounds and estimates:
+
+- Win rate.
+- Loss rate.
+- Tie rate.
+- Raw number of wins, losses, and ties.
+
+These odds are cached in `blackjackOdds.js` so the bot does not repeatedly rerun the same simulation.
+
+### Why it matters
+
+The bot uses these odds when deciding whether to make a normal chess move or start a blackjack recovery challenge. This means the bot is not blindly gambling. It compares:
+
+```text
+Expected blackjack value vs best chess move score
+```
+
+That is a strong feature. It makes the game more than random cards pasted onto chess.
+
+### Current limitation
+
+The Monte Carlo system currently models simplified blackjack strategy profiles. It is useful for bot decision-making, but it is not yet a full casino-grade blackjack simulator with deck counting, exact composition-dependent strategy, or advanced dealer-rule variations.
+
+---
+
+## Bot AI
+
+The bot is custom-built. It is not Stockfish.
+
+Bot strength is controlled through rating-style levels from **200** to **2600**. These are gameplay difficulty labels, not official calibrated Elo ratings.
+
+The bot evaluates chess moves using practical heuristics such as:
 
 - Material gain.
 - Capture value.
@@ -89,59 +245,52 @@ The bot is not a Stockfish engine. It is a custom heuristic bot that evaluates m
 - Mobility.
 - Forcing moves.
 - Checks and checkmates.
-- Hanging piece risk.
-- Possible opponent replies.
+- Hanging-piece risk.
+- Opponent reply danger.
 
-The bot can also decide whether blackjack is better than making a chess move. It compares the expected value of a blackjack recovery against the score of the best chess move.
+The bot also evaluates blackjack options using:
 
-## Main Features
+- Monte Carlo win/loss/tie rates.
+- Recovery utility.
+- Stake cost.
+- Skip-turn cost.
+- Opponent threat penalty.
+- Material deficit pressure.
+- Remaining blackjack attempts.
+- Bot risk tolerance and resource discipline.
 
-### Chessboard
+This means stronger bots should be less reckless with blackjack, while weaker bots can behave more chaotically.
 
-- Standard 8x8 board.
-- Click-based piece movement.
-- Legal move hints.
-- Capture hints.
-- Castling support.
-- Promotion support.
-- Board flip support.
-- Captured-piece tracking.
+---
 
-### Blackjack Challenge
+## Friend Mode / Multiplayer
 
-- Card deck generation.
-- Hit / stand flow.
-- Ace handling.
-- Dealer comparison.
-- Win / lose / tie result handling.
-- Captured-piece recovery after successful challenges.
-- Staked-piece loss after failed challenges.
+The project includes a local friend-room server.
 
-### Bot AI
+The server:
 
-- Rating levels from 200 to 2600.
-- Skill-dependent noise and blunder chance.
-- Softmax move selection for weaker bots.
-- More deterministic play for stronger bots.
-- Blackjack decision-making based on expected value.
+- Serves the production build from `dist/`.
+- Opens a WebSocket endpoint at `/ws`.
+- Creates and stores rooms in memory.
+- Assigns users as white, black, or spectator.
+- Syncs game state between clients.
+- Provides LAN origins through `/api/info`.
 
-### Friend Mode
+This is currently designed for local/LAN or simple hosted usage. Rooms are not persisted to a database.
 
-- Room creation.
-- White/black/spectator assignment.
-- WebSocket state sync.
-- LAN link support through the local server.
-- Shareable invite links.
+---
 
-### Themes
+## Themes
 
-The app currently has three visual themes:
+The game currently includes three visual themes:
 
-1. **Royal** — dark/gold luxury chess theme.
-2. **Pink & White** — bright playful theme.
+1. **Royal** — dark/gold luxury theme.
+2. **Pink & White** — bright pink/white theme.
 3. **Orange & Black** — high-contrast orange/black theme.
 
-Theme colours are controlled through CSS variables, so adding more themes should be straightforward.
+The themes are implemented using CSS custom properties in `src/styles.css`, making it straightforward to add more themes later.
+
+---
 
 ## Repository Structure
 
@@ -155,101 +304,111 @@ Theme colours are controlled through CSS variables, so adding more themes should
 │   ├── App.jsx
 │   ├── main.jsx
 │   ├── styles.css
+│   ├── blackjack
+│   │   ├── blackjackMonteCarlo.js
+│   │   ├── blackjackOdds.js
+│   │   ├── blackjackRoundMachine.js
+│   │   ├── blackjackSim.js
+│   │   └── blackjackStrategies.js
 │   ├── bot
 │   │   ├── botLevels.js
 │   │   ├── botProfiles.js
 │   │   ├── chooseBotAction.js
+│   │   ├── chooseRecoveryTarget.js
+│   │   ├── chooseStakePieces.js
 │   │   ├── evaluateBlackjackOption.js
 │   │   ├── evaluateChessMove.js
-│   │   └── other bot helper files
-│   ├── blackjack
-│   │   └── blackjack odds / helper logic
+│   │   └── supporting heuristic files
+│   ├── components
+│   │   ├── ChessBoard.jsx
+│   │   └── SidePanel.jsx
 │   └── rules
 │       ├── blackjackLimits.js
 │       └── stakeSafety.js
 └── README.md
 ```
 
+---
+
 ## Important Files
-
-### `index.html`
-
-The Vite HTML entry point. It mounts the React app into the `#root` element and loads `src/main.jsx`.
-
-### `src/main.jsx`
-
-The React entry file. It imports the global stylesheet and renders the main `App` component inside `React.StrictMode`.
 
 ### `src/App.jsx`
 
-The main application file. It holds the central game state, board rendering, chess movement, blackjack flow, room/share logic, bot interaction, theme selection, and UI panels.
+The main game container. It coordinates game state, chess logic, blackjack flow, bot turns, friend-room sync, themes, and high-level UI state.
 
-This file currently does a lot. Long-term, it should be split into smaller components and hooks.
+This file has improved because the board and side panel are now separated into components. However, it is still the central brain of the app and should eventually be broken down further into custom hooks.
 
-### `src/styles.css`
+### `src/components/ChessBoard.jsx`
 
-The main stylesheet. It defines the global layout, board appearance, right-side panels, buttons, modals, blackjack table styling, and the theme system.
+Renders the chessboard. It handles square rendering, pieces, legal destination styling, protected squares, stake highlights, recovery squares, king spotlight visuals, and cinematic board states.
 
-The three current themes are implemented using CSS custom properties:
+### `src/components/SidePanel.jsx`
 
-- `.theme-royal`
-- `.theme-pink`
-- `.theme-orange`
+Renders the right-side interface, including status, material metrics, bot/friend mode controls, blackjack recovery controls, captured pieces, stake selection, and lone-king blackjack UI.
 
-### `server.js`
+### `src/blackjack/blackjackRoundMachine.js`
 
-The local production/friend-mode server.
+Contains pure state-transition helpers for blackjack rounds: creating a round, hitting, revealing the dealer, applying dealer snapshots, and resolving the round.
 
-It:
+### `src/blackjack/blackjackSim.js`
 
-- Serves the built Vite app from `dist/`.
-- Starts an Express HTTP server.
-- Creates a WebSocket server on `/ws`.
-- Manages rooms in memory.
-- Assigns players as white, black, or spectator.
-- Broadcasts synced game state between room clients.
-- Provides `/api/info` for LAN origin information.
+Runs simplified blackjack gameplay simulations. It creates random hands, plays the player according to a selected strategy, plays the dealer, and returns win/loss/tie outcomes.
 
-### `src/rules/blackjackLimits.js`
+### `src/blackjack/blackjackMonteCarlo.js`
 
-Defines and manages the normal blackjack attempt limit. The current default is 5 normal blackjack attempts per player.
+Runs repeated blackjack simulations to estimate win, loss, and tie rates.
 
-### `src/rules/stakeSafety.js`
+### `src/blackjack/blackjackOdds.js`
 
-Checks whether staked pieces can be removed without exposing the staking player’s king to check.
+Caches Monte Carlo results by strategy and simulation count.
 
-### `src/bot/botLevels.js`
+### `src/blackjack/blackjackStrategies.js`
 
-Defines rating levels and converts a rating into skill parameters such as:
-
-- Search depth.
-- Evaluation noise.
-- Blunder chance.
-- Mistake chance.
-- Material awareness.
-- Tactical awareness.
-- King-safety awareness.
-- Softmax temperature.
-
-### `src/bot/botProfiles.js`
-
-Turns bot rating configs into full bot behaviour profiles. It adds blackjack-related personality parameters such as risk tolerance, resource discipline, stake awareness, and blackjack strategy.
-
-### `src/bot/evaluateChessMove.js`
-
-Scores legal chess moves using custom heuristics. This is the main move-evaluation layer for the bot.
-
-### `src/bot/evaluateBlackjackOption.js`
-
-Scores whether the bot should use blackjack instead of making a chess move. It considers recovery value, stake cost, skip-turn cost, opponent threat, material deficit, and remaining blackjack attempts.
+Defines simplified blackjack action strategies such as random, random-plus, dealer-aware, and basic-strategy-lite.
 
 ### `src/bot/chooseBotAction.js`
 
-Compares the best chess move against the best blackjack option and returns the bot’s selected action.
+The bot's top-level decision function. It compares the best chess move against the best blackjack option and chooses the stronger action.
+
+Bot debug output is gated behind:
+
+```text
+VITE_BOT_DEBUG=true
+```
+
+in development mode.
+
+### `src/bot/evaluateChessMove.js`
+
+Scores legal chess moves using custom heuristics.
+
+### `src/bot/evaluateBlackjackOption.js`
+
+Scores blackjack recovery options using Monte Carlo odds, recovery utility, stake cost, turn cost, threat penalty, deficit pressure, and remaining attempts.
+
+### `src/bot/chooseRecoveryTarget.js`
+
+Finds legal captured pieces that can be recovered and scores their usefulness.
+
+### `src/bot/chooseStakePieces.js`
+
+Finds legal stake pieces and generates stake combinations for recovery attempts.
+
+### `src/rules/blackjackLimits.js`
+
+Tracks normal blackjack usage and limits. The default normal limit is 5 attempts per player.
+
+### `src/rules/stakeSafety.js`
+
+Checks whether removing a staked piece would expose the player's king.
+
+### `server.js`
+
+Serves the built app and manages WebSocket friend rooms.
+
+---
 
 ## Installation
-
-Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/zga21/THE-ROYAL-GAMBIT2.git
@@ -257,102 +416,154 @@ cd THE-ROYAL-GAMBIT2
 npm install
 ```
 
+---
+
 ## Running in Development
 
 ```bash
 npm run dev
 ```
 
-This starts the Vite dev server on `127.0.0.1`.
+The Vite dev server runs on `127.0.0.1`.
 
-## Building for Production
+---
+
+## Building
 
 ```bash
 npm run build
 ```
 
-This creates a production build inside `dist/`.
+This creates the production build inside `dist/`.
+
+---
 
 ## Running Friend Mode / Local Server
 
-Build the project first:
+Build first:
 
 ```bash
 npm run build
 ```
 
-Then start the server:
+Then run:
 
 ```bash
 npm run serve
 ```
 
-Or use:
+Or build and serve in one command:
 
 ```bash
 npm run friend
 ```
 
-The server runs on port `5174` by default unless a different `PORT` environment variable is provided.
+The server defaults to port `5174` unless `PORT` is set.
 
-## Available NPM Scripts
+---
+
+## Running Tests
+
+```bash
+npm test
+```
+
+The project uses Node's built-in test runner through `node --test`.
+
+Important: if no test files are present, this command will not prove the game is correct. The highest-value tests to add are:
+
+- Blackjack round state transitions.
+- Monte Carlo output shape and rate bounds.
+- Stake safety for pinned pieces.
+- Blackjack attempt-limit enforcement.
+- Recovery-square legality.
+- Bot action choice when blackjack EV is clearly better/worse than a chess move.
+
+---
+
+## Available Scripts
 
 | Script | Purpose |
 |---|---|
 | `npm run dev` | Start the Vite development server. |
+| `npm test` | Run Node tests. |
 | `npm run build` | Build the app for production. |
-| `npm run preview` | Preview the Vite production build locally. |
-| `npm run serve` | Serve the built app with the Express/WebSocket server. |
-| `npm run friend` | Build the app and then start the friend-mode server. |
+| `npm run preview` | Preview the production build locally. |
+| `npm run serve` | Serve the built app through Express/WebSocket server. |
+| `npm run friend` | Build the app and start the friend-mode server. |
 
-## Design Notes
+---
 
-The strongest part of this project is the game concept: it is not a clone of normal chess. The blackjack recovery system creates a second strategic layer around risk, comeback mechanics, and material valuation.
+## Strengths
 
-The weakest part right now is architecture. `App.jsx` is carrying too much responsibility. It currently mixes game-state logic, UI rendering, blackjack handling, multiplayer sync, bot calls, and theme management. That is fine for a prototype, but it will become painful if the project grows.
+- The concept is original enough to be worth showing.
+- The blackjack mechanic is connected to material imbalance rather than being decorative.
+- The bot considers both chess moves and blackjack recovery options.
+- Monte Carlo odds make the blackjack AI decision more defensible.
+- The project now has better separation than before through `ChessBoard`, `SidePanel`, and blackjack state helpers.
+- The theme system is clean and extendable.
 
-## Recommended Next Improvements
+---
 
-### High Priority
+## Weaknesses / Next Improvements
 
-- Split `App.jsx` into smaller components.
-- Move blackjack state transitions into a dedicated hook or state machine.
-- Move chessboard rendering into a separate `ChessBoard` component.
-- Move side-panel UI into separate components.
-- Add unit tests for blackjack eligibility, stake safety, and piece recovery.
-- Remove or gate `console.table` bot debugging behind a development flag.
+This project is promising, but these are the areas that still make it look like a prototype:
 
-### Medium Priority
+1. **`App.jsx` is still too large.**  
+   Move chess state, blackjack state, bot turns, and multiplayer sync into separate hooks.
 
-- Add persistent game history.
-- Add undo/redo reliability checks.
-- Add online deployment instructions.
-- Add a proper rules page inside the app.
-- Add screenshots or GIFs to the README.
-- Add mobile polish for smaller screens.
+2. **Rules need player-facing documentation inside the app.**  
+   A new player will not instantly understand stake matching, recovery eligibility, king gamble, and blackjack limits.
 
-### Future Ideas
+3. **Tests need to become serious.**  
+   The project now has an `npm test` command, but the important part is coverage of the custom rules. Chess.js already handles chess. Your risk is the variant logic.
 
-- Ranked bot personalities with named characters.
-- Defence/strategy-themed modes.
-- More comeback mechanics with strict balancing.
-- Match history and statistics.
-- Timed games.
-- Spectator mode improvements.
-- Cloud-hosted multiplayer rooms.
+4. **Monte Carlo results should be visible somewhere.**  
+   Add a small developer/statistics panel showing bot blackjack win rate, loss rate, tie rate, simulation count, and selected strategy. That would make the engineering behind the game obvious.
 
-## Known Limitations
+5. **Friend rooms are memory-only.**  
+   This is fine for local play, but hosted multiplayer needs persistence, reconnect handling, and better room lifecycle management.
 
-- Multiplayer rooms are stored in memory, so they reset when the server restarts.
-- The bot is heuristic-based, not a full chess engine.
-- There are no automated tests yet.
-- Some core logic is still concentrated in `App.jsx`.
-- The blackjack rules are custom and should be documented clearly for players inside the UI.
+6. **The README needs real screenshots.**  
+   Without visuals, the project still undersells itself. Add the images listed at the top of this README.
+
+---
+
+## Suggested Roadmap
+
+### Version 1 — Make it presentable
+
+- Add screenshots to `docs/images/`.
+- Add an in-game rules modal.
+- Add tests for blackjack and staking rules.
+- Reduce `App.jsx` into focused hooks.
+
+### Version 2 — Make it impressive
+
+- Add Monte Carlo stats display.
+- Add named bot personalities.
+- Add game history and move log.
+- Add stronger animations for recovery/stake outcomes.
+- Add deployment instructions.
+
+### Version 3 — Make it defensible
+
+- Add persistent multiplayer rooms.
+- Add reconnection support.
+- Add matchmaking or lobby flow.
+- Add serious balancing data from simulated games.
+- Add a formal rulebook.
+
+---
 
 ## Project Vision
 
-The Royal Gambit is an experimental chess variant built around the question:
+**The Royal Gambit** asks:
 
-> What if losing material did not simply mean falling behind, but opened a risky strategic route back into the game?
+> What if losing material in chess did not simply mean decline, but opened a dangerous comeback route?
 
-The aim is to create a game that feels royal, cinematic, tactical, and unpredictable while still respecting the structure of chess.
+The goal is to create a chess variant that feels tactical, cinematic, royal, and psychologically sharp. A player should constantly ask:
+
+```text
+Do I play the board, or do I risk the crown?
+```
