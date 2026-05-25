@@ -14,6 +14,17 @@ import {
   Swords,
   Users,
 } from 'lucide-react';
+import { chooseBotAction } from './bot/chooseBotAction.js';
+import { BOT_RATINGS } from './bot/botLevels.js';
+import {
+  canUseNormalBlackjackByLimit,
+  getNormalBlackjackLimit,
+  getNormalBlackjackRemaining,
+  getNormalBlackjackUsed,
+  normalizeBlackjackUsage,
+  recordNormalBlackjackUse,
+} from './rules/blackjackLimits.js';
+import { areStakePiecesKingSafe, canStakePieceWithoutExposingKing } from './rules/stakeSafety.js';
 
 const PIECE_VALUES = {
   pawn: 1,
@@ -80,7 +91,11 @@ const PIECE_GLYPHS = {
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
 const PROMOTIONS = ['queen', 'rook', 'bishop', 'knight'];
-const BOT_RATINGS = Array.from({ length: 10 }, (_, index) => 200 + index * 200);
+const THEMES = [
+  { id: 'royal', label: 'Royal' },
+  { id: 'pink', label: 'Pink & White' },
+  { id: 'orange', label: 'Orange & Black' },
+];
 const CARD_SUITS = ['♠', '♥', '♦', '♣'];
 const CARD_RANKS = [
   { label: 'A', value: 11 },
@@ -365,6 +380,7 @@ function canStartBlackjackChallenge(state, player, targetCapturedPieceIds, stake
   if (status !== 'active') return false;
   if (chess.isCheck()) return false;
   if (normalizeKingGambleTracker(state.kingGamble).cooldown[player]) return false;
+  if (!canUseNormalBlackjackByLimit(state, player)) return false;
   if (deficitFor(pieces, player) < 5) return false;
 
   const targetIds = Array.isArray(targetCapturedPieceIds) ? targetCapturedPieceIds : [targetCapturedPieceIds];
@@ -378,6 +394,7 @@ function canStartBlackjackChallenge(state, player, targetCapturedPieceIds, stake
   if (staked.some((piece) => !piece)) return false;
   if (staked.some((piece) => piece.owner !== player || piece.isCaptured || !piece.currentSquare)) return false;
   if (!loneKing && staked.some((piece) => piece.type === 'king')) return false;
+  if (!loneKing && !areStakePiecesKingSafe(state, staked, player)) return false;
 
   const stakeValue = staked.reduce((sum, piece) => sum + PIECE_VALUES[piece.type], 0);
   const targetValue = targets.reduce((sum, target) => sum + recoveryValue(target), 0);
@@ -441,6 +458,7 @@ function initialGameState() {
     status: 'active',
     protection: { pieceIds: [], protectedAgainst: null },
     kingGamble: normalizeKingGambleTracker(),
+    blackjackUsage: normalizeBlackjackUsage(),
   };
 }
 
@@ -451,6 +469,7 @@ function stateForUrl(game, mode, botRating) {
     status: game.status,
     protection: game.protection,
     kingGamble: normalizeKingGambleTracker(game.kingGamble),
+    blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
     mode,
     botRating,
   };
@@ -463,6 +482,7 @@ function serializeGame(game) {
     status: game.status,
     protection: game.protection,
     kingGamble: normalizeKingGambleTracker(game.kingGamble),
+    blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
   };
 }
 
@@ -473,6 +493,7 @@ function hydrateGame(serialized) {
     status: serialized.status,
     protection: serialized.protection ?? { pieceIds: [], protectedAgainst: null },
     kingGamble: normalizeKingGambleTracker(serialized.kingGamble),
+    blackjackUsage: normalizeBlackjackUsage(serialized.blackjackUsage),
   };
 }
 
@@ -1229,6 +1250,7 @@ function App() {
   const [game, setGame] = useState(() => sharedInitial?.game ?? initialGameState());
   const [playMode, setPlayMode] = useState(() => (initialRoomId ? 'friend' : sharedInitial?.mode ?? 'friend'));
   const [botRating, setBotRating] = useState(() => sharedInitial?.botRating ?? 800);
+  const [pendingBotRating, setPendingBotRating] = useState(() => sharedInitial?.botRating ?? 800);
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [selectedTargetIds, setSelectedTargetIds] = useState([]);
   const [selectedStakeIds, setSelectedStakeIds] = useState([]);
@@ -1250,6 +1272,11 @@ function App() {
   const [endgameModal, setEndgameModal] = useState(null);
   const [endgameWinner, setEndgameWinner] = useState(null);
   const [reviewMode, setReviewMode] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') return 'royal';
+    const savedTheme = window.localStorage.getItem('royalGambitTheme');
+    return THEMES.some((item) => item.id === savedTheme) ? savedTheme : 'royal';
+  });
   const socketRef = useRef(null);
   const applyingRemoteRef = useRef(false);
   const broadcastTimerRef = useRef(null);
@@ -1282,10 +1309,15 @@ function App() {
   const deficit = deficitFor(game.pieces, currentTurn);
   const playerInCheck = game.chess.isCheck();
   const blackjackCooldownActive = normalizeKingGambleTracker(game.kingGamble).cooldown[currentTurn];
+  const normalBlackjackUsed = getNormalBlackjackUsed(game, currentTurn);
+  const normalBlackjackLimit = getNormalBlackjackLimit(game, currentTurn);
+  const normalBlackjackRemaining = getNormalBlackjackRemaining(game, currentTurn);
+  const normalBlackjackLimitAvailable = canUseNormalBlackjackByLimit(game, currentTurn);
   const currentActivePieces = game.pieces.filter((piece) => piece.owner === currentTurn && !piece.isCaptured);
   const loneKingMode = isLoneKing(game.pieces, currentTurn);
   const blackjackBaseAllowed =
     game.status === 'active' && !playerInCheck && !blackjackCooldownActive && deficit >= 5 && canAct;
+  const normalBlackjackBaseAllowed = blackjackBaseAllowed && normalBlackjackLimitAvailable;
 
   const capturedTargets = game.pieces.filter(
     (piece) =>
@@ -1333,7 +1365,7 @@ function App() {
   const kingChallengeReady =
     loneKingMode &&
     blackjackBaseAllowed;
-  const blackjackAvailable = blackjackBaseAllowed && capturedTargets.length > 0;
+  const blackjackAvailable = normalBlackjackBaseAllowed && capturedTargets.length > 0 && !loneKingMode;
 
   useEffect(() => {
     if (reviewMode && game.status !== 'active') return;
@@ -1369,6 +1401,10 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem('royalGambitTheme', theme);
+  }, [theme]);
 
   useEffect(() => {
     if (playMode !== 'friend' || !roomId) {
@@ -1411,6 +1447,7 @@ function App() {
       setGame(hydrated.game);
       setPlayMode('friend');
       setBotRating(hydrated.botRating);
+      setPendingBotRating(hydrated.botRating);
       setRound(hydrated.round);
       setKingGambleDecision(hydrated.kingGambleDecision);
       setMessage(hydrated.message);
@@ -1490,14 +1527,23 @@ function App() {
     setSelectedSquare(null);
     setMessage(`Bot ${botRating} is thinking.`);
     const timer = window.setTimeout(() => {
-      const botChallenge = chooseBotBlackjack(game, botRating);
-      if (botChallenge) {
-        beginRound(botChallenge.mode, { player: botColor, targets: botChallenge.targets, stakes: botChallenge.stakes });
-        return;
+      const botAction = chooseBotAction(game, botRating);
+      if (botAction.type === 'blackjack') {
+        const targets = Array.isArray(botAction.target) ? botAction.target : [botAction.target].filter(Boolean);
+        const stakes = Array.isArray(botAction.stake) ? botAction.stake : botAction.stake?.pieces ?? [];
+        if (targets.length && stakes.length) {
+          beginRound(botAction.mode ?? 'standard', {
+            player: botColor,
+            targets,
+            stakes,
+          });
+          return;
+        }
+        // TODO: wire future blackjack action shapes into the existing challenge UI/flow.
+        console.debug('[Royal Gambit bot] Blackjack action could not be started.', botAction);
       }
-      const botMove = chooseBotMove(game, botRating);
-      if (botMove) {
-        finishNormalMove(botMove, game, `Bot ${botRating}`);
+      if (botAction.move) {
+        finishNormalMove(botAction.move, game, `Bot ${botRating}`);
       }
     }, 450);
     return () => window.clearTimeout(timer);
@@ -1554,7 +1600,8 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [kingGambleDecision, playMode, round, game]);
 
-  function resetGame() {
+  function resetGame(nextMessage = 'White to move.') {
+    const resetMessage = typeof nextMessage === 'string' ? nextMessage : 'White to move.';
     dealerTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     dealerTimersRef.current = [];
     setGame(initialGameState());
@@ -1571,7 +1618,12 @@ function App() {
     setEndgameWinner(null);
     setReviewMode(false);
     setShareLink('');
-    setMessage('White to move.');
+    setMessage(resetMessage);
+  }
+
+  function confirmBotRating() {
+    setBotRating(pendingBotRating);
+    resetGame(`Bot ${pendingBotRating} confirmed. White to move.`);
   }
 
   function leaveRoomForBot() {
@@ -1629,6 +1681,7 @@ function App() {
       status,
       protection: nextProtection,
       kingGamble: clearKingGambleCooldownAfterMove(sourceGame.kingGamble, movingColor, played),
+      blackjackUsage: normalizeBlackjackUsage(sourceGame.blackjackUsage),
     });
     setSelectedSquare(null);
     setPendingPromotion(null);
@@ -1684,6 +1737,12 @@ function App() {
   }
 
   function toggleStake(pieceId) {
+    const piece = game.pieces.find((item) => item.id === pieceId);
+    if (piece && !selectedStakeIds.includes(pieceId) && !canStakePieceWithoutExposingKing(game, piece, currentTurn)) {
+      setMessage(`${labelColor(currentTurn)} cannot stake a pinned ${piece.type}; the king would be exposed.`);
+      return;
+    }
+
     setSelectedStakeIds((ids) =>
       ids.includes(pieceId) ? ids.filter((id) => id !== pieceId) : [...ids, pieceId],
     );
@@ -1763,6 +1822,15 @@ function App() {
   }
 
   function beginRound(mode, override = null) {
+    const player = override?.player ?? currentTurn;
+    if (mode === 'standard') {
+      if (!canUseNormalBlackjackByLimit(game, player)) {
+        setMessage('Normal blackjack limit reached.');
+        return;
+      }
+      setGame((current) => recordNormalBlackjackUse(current, player));
+    }
+
     const deck = makeDeck();
     let nextDeck = deck;
     let card;
@@ -1780,7 +1848,7 @@ function App() {
     setRound({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       mode,
-      player: override?.player ?? currentTurn,
+      player,
       budget: override?.budget ?? (mode === 'king' ? 2 : null),
       points: override?.points ?? kingGambleDecision?.points ?? 0,
       handCount: override?.handCount ?? kingGambleDecision?.handCount ?? 0,
@@ -1796,7 +1864,7 @@ function App() {
     setMessage(
       mode === 'king'
         ? 'The crown is on the table...'
-        : `${labelColor(override?.player ?? currentTurn)} started blackjack.`,
+        : `${labelColor(player)} started blackjack.`,
     );
   }
 
@@ -1937,6 +2005,7 @@ function App() {
         protectedAgainst: nextColor,
       },
       kingGamble: resetKingGambleCooldown(game.kingGamble, player),
+      blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
     });
     setCinematicPhase('recoveryAnimation');
     setKingGambleIntro(false);
@@ -2095,6 +2164,7 @@ function App() {
       status: evaluated.status,
       protection: result === 'win' ? nextProtection : { pieceIds: [], protectedAgainst: null },
       kingGamble: nextKingGamble,
+      blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
     });
     setSelectedTargetIds([]);
     setSelectedStakeIds([]);
@@ -2168,7 +2238,7 @@ function App() {
       : null;
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell theme-${theme}`}>
       <section
         className={[
           'play-surface',
@@ -2183,6 +2253,16 @@ function App() {
             <h1>The Royal Gambit</h1>
           </div>
           <div className="top-actions">
+            <label className="theme-picker" htmlFor="theme-select">
+              <span>Theme</span>
+              <select id="theme-select" value={theme} onChange={(event) => setTheme(event.target.value)}>
+                {THEMES.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="mode-toggle" aria-label="Play mode">
               <button
                 type="button"
@@ -2433,19 +2513,24 @@ function App() {
               <>
                 <div className="select-row">
                   <label htmlFor="bot-rating">Bot strength</label>
-                  <select
-                    id="bot-rating"
-                    value={botRating}
-                    onChange={(event) => setBotRating(Number(event.target.value))}
-                  >
-                    {BOT_RATINGS.map((rating) => (
-                      <option key={rating} value={rating}>
-                        {rating}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="bot-rating-controls">
+                    <select
+                      id="bot-rating"
+                      value={pendingBotRating}
+                      onChange={(event) => setPendingBotRating(Number(event.target.value))}
+                    >
+                      {BOT_RATINGS.map((rating) => (
+                        <option key={rating} value={rating}>
+                          {rating}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="button" className="rating-confirm-button" onClick={confirmBotRating}>
+                      Confirm
+                    </button>
+                  </div>
                 </div>
-                <p className="small-copy">You play White. The bot plays Black automatically.</p>
+                <p className="small-copy">Active bot: {botRating}. Confirming a rating starts a fresh board.</p>
               </>
             ) : (
               <>
@@ -2565,8 +2650,15 @@ function App() {
           <p className="small-copy">
             When behind by 5 or more, recover one or many captured pieces by matching their total value exactly.
           </p>
+          <div className="usage-meter">
+            <span>{labelColor(currentTurn)} normal blackjack attempts</span>
+            <strong>
+              {normalBlackjackRemaining} / {normalBlackjackLimit}
+            </strong>
+            <small>Used {normalBlackjackUsed}</small>
+          </div>
 
-          {!blackjackBaseAllowed && (
+          {(!blackjackBaseAllowed || (!loneKingMode && !normalBlackjackLimitAvailable)) && (
             <div className="disabled-reason">
               {game.status !== 'active'
                 ? 'The game is over.'
@@ -2574,6 +2666,8 @@ function App() {
                   ? 'Your king is in check.'
                   : blackjackCooldownActive
                     ? 'Move the king one square before another blackjack.'
+                  : !loneKingMode && !normalBlackjackLimitAvailable
+                    ? 'Normal blackjack limit reached.'
                   : isLiveRoom && !canAct
                     ? `Waiting for ${labelColor(currentTurn)} to move.`
                     : `Need a deficit of at least 5. Current deficit: ${Math.max(0, deficit)}.`}
@@ -2589,7 +2683,7 @@ function App() {
                   key={piece.id}
                   className={selectedTargetIds.includes(piece.id) ? 'selected-row' : ''}
                   onClick={() => toggleTarget(piece.id)}
-                  disabled={!blackjackBaseAllowed || loneKingMode}
+                  disabled={!normalBlackjackBaseAllowed || loneKingMode}
                 >
                   <span>{PIECE_GLYPHS[piece.owner][piece.originalType]}</span>
                   <strong>{piece.originalType}</strong>
@@ -2608,19 +2702,23 @@ function App() {
               <div className="stake-grid">
                 {currentActivePieces
                   .filter((piece) => piece.type !== 'king')
-                  .map((piece) => (
-                    <button
-                      type="button"
-                      key={piece.id}
-                      className={selectedStakeIds.includes(piece.id) ? 'selected-row' : ''}
-                      onClick={() => toggleStake(piece.id)}
-                      disabled={!blackjackBaseAllowed || !selectedTargets.length}
-                    >
-                      <span>{PIECE_GLYPHS[piece.owner][piece.type]}</span>
-                      <small>{piece.currentSquare}</small>
-                      <b>{PIECE_VALUES[piece.type]}</b>
-                    </button>
-                  ))}
+                  .map((piece) => {
+                    const stakeIsKingSafe = canStakePieceWithoutExposingKing(game, piece, currentTurn);
+                    return (
+                      <button
+                        type="button"
+                        key={piece.id}
+                        className={selectedStakeIds.includes(piece.id) ? 'selected-row' : ''}
+                        onClick={() => toggleStake(piece.id)}
+                        disabled={!normalBlackjackBaseAllowed || !selectedTargets.length || !stakeIsKingSafe}
+                        title={!stakeIsKingSafe ? 'Pinned piece: staking it would expose your king.' : undefined}
+                      >
+                        <span>{PIECE_GLYPHS[piece.owner][piece.type]}</span>
+                        <small>{piece.currentSquare}</small>
+                        <b>{PIECE_VALUES[piece.type]}</b>
+                      </button>
+                    );
+                  })}
               </div>
               <div className="stake-total">
                 <span>Stake {stakeTotal}</span>
