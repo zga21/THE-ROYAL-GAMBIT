@@ -1,21 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
 import {
-  BadgeAlert,
   Bot,
-  CircleDot,
-  Copy,
   Crown,
-  Link,
   RotateCcw,
   RotateCw,
-  Shield,
   Spade,
-  Swords,
   Users,
 } from 'lucide-react';
 import { chooseBotAction } from './bot/chooseBotAction.js';
 import { BOT_RATINGS } from './bot/botLevels.js';
+import {
+  applyDealerSnapshot,
+  createBlackjackRound,
+  playerHit,
+  resolveRound,
+  revealDealer,
+} from './blackjack/blackjackRoundMachine.js';
+import { ChessBoard } from './components/ChessBoard.jsx';
+import { SidePanel } from './components/SidePanel.jsx';
 import {
   canUseNormalBlackjackByLimit,
   getNormalBlackjackLimit,
@@ -1845,8 +1848,7 @@ function App() {
     [card, nextDeck] = drawCard(nextDeck);
     dealerHand.push(card);
 
-    setRound({
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    setRound(createBlackjackRound({
       mode,
       player,
       budget: override?.budget ?? (mode === 'king' ? 2 : null),
@@ -1859,7 +1861,7 @@ function App() {
       result: null,
       targets: override?.targets ?? (mode === 'standard' ? selectedTargets : selectedKingRecovery),
       stakes: override?.stakes ?? (mode === 'standard' ? selectedStakes : currentActivePieces),
-    });
+    }));
     setSelectedSquare(null);
     setMessage(
       mode === 'king'
@@ -1878,7 +1880,7 @@ function App() {
     }
 
     const result = resultFor(nextRound.playerHand, dealerHand);
-    const resolvedRound = { ...nextRound, deck, dealerHand, revealDealer: true, result };
+    const resolvedRound = resolveRound(nextRound, { deck, dealerHand, result });
     setRound(resolvedRound);
     applyBlackjackResult(resolvedRound, result);
   }
@@ -1888,13 +1890,13 @@ function App() {
     let card;
     let deck;
     [card, deck] = drawCard(round.deck);
-    const playerHand = [...round.playerHand, card];
-    const nextRound = { ...round, deck, playerHand };
+    const nextRound = playerHit(round, card, deck);
+    const playerHand = nextRound.playerHand;
     setCinematicPhase('playerHit');
     setRound(nextRound);
     if (handValue(playerHand) > 21) {
       const revealTimer = window.setTimeout(() => {
-        const resolvedRound = { ...nextRound, revealDealer: true, result: 'lose' };
+        const resolvedRound = resolveRound(nextRound, { result: 'lose' });
         setRound(resolvedRound);
         applyBlackjackResult(resolvedRound, 'lose');
       }, 1000);
@@ -1911,7 +1913,7 @@ function App() {
     dealerTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     dealerTimersRef.current = [];
 
-    const standingRound = { ...round, revealDealer: true, playerStood: true, dealerPlaying: true };
+    const standingRound = revealDealer(round);
     setRound(standingRound);
     setCinematicPhase('dealerReveal');
 
@@ -1936,20 +1938,13 @@ function App() {
       setCinematicPhase('dealerPlay');
       dealerSnapshots.forEach((snapshot, index) => {
         schedule(() => {
-          setRound((current) => (current?.id === standingRound.id ? { ...current, ...snapshot } : current));
+          setRound((current) => (current?.id === standingRound.id ? applyDealerSnapshot(current, snapshot) : current));
         }, (index + 1) * 950);
       });
 
       schedule(() => {
         const result = resultFor(playerHand, dealerHand);
-        const resolvedRound = {
-          ...standingRound,
-          deck,
-          dealerHand: [...dealerHand],
-          revealDealer: true,
-          dealerPlaying: false,
-          result,
-        };
+        const resolvedRound = resolveRound(standingRound, { deck, dealerHand, result });
         setRound(resolvedRound);
         applyBlackjackResult(resolvedRound, result);
       }, Math.max(1400, dealerSnapshots.length * 950 + 1400));
@@ -2306,75 +2301,29 @@ function App() {
           </div>
         </header>
 
-        <div className={['board-wrap', royalCinematicActive ? 'board-tilted' : ''].join(' ')}>
-          <div className="rank-labels" aria-hidden="true">
-            {boardRanks.map((rank) => (
-              <span key={rank}>{rank}</span>
-            ))}
-          </div>
-          <div className="board" aria-label="Chess board">
-            {boardSquares.map((square) => {
-              const fileIndex = FILES.indexOf(square[0]);
-              const rankIndex = RANKS.indexOf(square[1]);
-              const squarePiece = pieceAt(game.pieces, square);
-              const isLight = (fileIndex + rankIndex) % 2 === 0;
-              const isSelected = selectedSquare === square;
-              const canMoveHere = selectedMoves.some((move) => move.to === square);
-              const canCastleHere = selectedCastlePartnerSquares.includes(square);
-              const protectedHere = protectedSquares.includes(square);
-              const stakedHere = stakedSquares.includes(square);
-              const recoveryHere = recoverySquares.includes(square);
-              const endgameFocusHere = endgameFocusSquare === square;
-              const recoveryPiece =
-                (round?.targets ?? selectedTargets).find((piece) => piece.originalSquare === square) ??
-                selectedKingRecovery.find((piece) => piece.originalSquare === square);
-              const kingSpotlightHere = kingSpotlightSquare === square;
-              return (
-                <button
-                  type="button"
-                  key={square}
-                  className={[
-                    'square',
-                    isLight ? 'light' : 'dark',
-                    isSelected ? 'selected' : '',
-                    canMoveHere ? 'destination' : '',
-                    canCastleHere ? 'castle-partner' : '',
-                    protectedHere ? 'protected' : '',
-                    stakedHere ? 'staked-square' : '',
-                    recoveryHere ? 'recovery-square' : '',
-                    kingSpotlightHere ? 'king-spotlight' : '',
-                    endgameFocusHere && game.status === 'checkmate' ? 'endgame-king-lost' : '',
-                    endgameFocusHere && game.status === 'stalemate' ? 'endgame-king-stalemate' : '',
-                  ].join(' ')}
-                  onClick={() => handleSquareClick(square)}
-                  aria-label={`${square}${squarePiece ? ` ${squarePiece.owner} ${squarePiece.type}` : ''}`}
-                >
-                  <span className="coord">{square}</span>
-                  {protectedHere && <Shield size={16} className="shield" aria-hidden="true" />}
-                  {royalCinematicActive && stakedHere && <span className="square-cinematic-label stake-label">Stake</span>}
-                  {royalCinematicActive && recoveryHere && (
-                    <>
-                      <span className="square-cinematic-label recovery-label">Recovery</span>
-                      <span className="recovery-ghost">
-                        {PIECE_GLYPHS[recoveryPiece?.owner ?? currentTurn][recoveryPiece?.originalType ?? 'pawn']}
-                      </span>
-                    </>
-                  )}
-                  {squarePiece && (
-                    <span className={`piece ${squarePiece.owner}`}>
-                      {PIECE_GLYPHS[squarePiece.owner][squarePiece.type]}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          <div className="file-labels" aria-hidden="true">
-            {boardFiles.map((file) => (
-              <span key={file}>{file}</span>
-            ))}
-          </div>
-        </div>
+        <ChessBoard
+          boardFiles={boardFiles}
+          boardRanks={boardRanks}
+          boardSquares={boardSquares}
+          currentTurn={currentTurn}
+          endgameFocusSquare={endgameFocusSquare}
+          files={FILES}
+          game={game}
+          kingSpotlightSquare={kingSpotlightSquare}
+          onSquareClick={handleSquareClick}
+          pieceGlyphs={PIECE_GLYPHS}
+          protectedSquares={protectedSquares}
+          ranks={RANKS}
+          recoverySquares={recoverySquares}
+          round={round}
+          royalCinematicActive={royalCinematicActive}
+          selectedCastlePartnerSquares={selectedCastlePartnerSquares}
+          selectedKingRecovery={selectedKingRecovery}
+          selectedMoves={selectedMoves}
+          selectedSquare={selectedSquare}
+          selectedTargets={selectedTargets}
+          stakedSquares={stakedSquares}
+        />
 
         <RoyalTableCinematic
           round={round}
@@ -2477,307 +2426,68 @@ function App() {
         />
       </section>
 
-      <aside className="side-panel">
-        <section className="status-panel">
-          <div className="status-line">
-            <CircleDot size={18} aria-hidden="true" />
-            <strong>{message}</strong>
-          </div>
-          <div className="metrics">
-            <div>
-              <span>Turn</span>
-              <strong>{labelColor(currentTurn)}</strong>
-            </div>
-            <div>
-              <span>White</span>
-              <strong>{material.white}</strong>
-            </div>
-            <div>
-              <span>Black</span>
-              <strong>{material.black}</strong>
-            </div>
-            <div>
-              <span>Deficit</span>
-              <strong>{Math.max(0, deficit)}</strong>
-            </div>
-          </div>
-          {blackjackAvailable && (
-            <div className="blackjack-available">
-              <Spade size={16} aria-hidden="true" />
-              <strong>Blackjack Available</strong>
-              <span>Down 5+ Material</span>
-            </div>
-          )}
-          <div className="mode-panel">
-            {playMode === 'bot' ? (
-              <>
-                <div className="select-row">
-                  <label htmlFor="bot-rating">Bot strength</label>
-                  <div className="bot-rating-controls">
-                    <select
-                      id="bot-rating"
-                      value={pendingBotRating}
-                      onChange={(event) => setPendingBotRating(Number(event.target.value))}
-                    >
-                      {BOT_RATINGS.map((rating) => (
-                        <option key={rating} value={rating}>
-                          {rating}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="button" className="rating-confirm-button" onClick={confirmBotRating}>
-                      Confirm
-                    </button>
-                  </div>
-                </div>
-                <p className="small-copy">Active bot: {botRating}. Confirming a rating starts a fresh board.</p>
-              </>
-            ) : (
-              <>
-                <p className="room-status">
-                  Room server: {roomStatus === 'connected' ? 'connected' : friendOrigin ? 'ready' : 'offline'}
-                  {playerColor ? ` | You are ${labelColor(playerColor)}` : ''}
-                  {roomPlayers ? ` | Players ${Math.min(roomPlayers, 2)}/2` : ''}
-                </p>
-                <button type="button" className="link-button" onClick={copyFriendLink}>
-                  <Link size={16} aria-hidden="true" />
-                  Create friend link
-                </button>
-                {shareLink && (
-                  <>
-                    <div className="share-box">
-                      <Copy size={15} aria-hidden="true" />
-                      <span>{shareLink}</span>
-                    </div>
-                    <button type="button" className="copy-link-button" onClick={() => copyLinkToClipboard(shareLink)}>
-                      <Copy size={16} aria-hidden="true" />
-                      Copy link
-                    </button>
-                  </>
-                )}
-              </>
-            )}
-          </div>
-          {game.status !== 'active' && (
-            <p className="notice">
-              <BadgeAlert size={16} aria-hidden="true" />
-              Game status: {game.status}.
-            </p>
-          )}
-          {playerInCheck && game.status === 'active' && (
-            <p className="notice">
-              <BadgeAlert size={16} aria-hidden="true" />
-              Blackjack is locked while the king is in check.
-            </p>
-          )}
-        </section>
-
-        {round && (
-          <BlackjackTable
-            round={round}
-            onHit={hit}
-            onStand={stand}
-            onClose={closeResolvedRound}
-            isAutoPlayer={playMode === 'bot' && round.player === botColor}
-            actionsLocked={!canControlRound}
-            lockedLabel={`Waiting for ${labelColor(round.player)} to play blackjack.`}
-            cinematicActive={royalCinematicActive}
-          />
-        )}
-
-        {false && kingGambleDecision && !round && (
-          <section className="challenge-panel king-claim-panel">
-            <div className="panel-heading">
-              <Crown size={18} aria-hidden="true" />
-              <h2>King's Gamble Prize</h2>
-            </div>
-            <p className="small-copy">
-              Claim pieces worth up to {kingRecoveryBudget} point(s), or play another hand to double the prize to{' '}
-              {kingRecoveryBudget * 2}. Losing a hand passes the turn; only checkmate ends the crown.
-            </p>
-            {!canResolveKingGamble && (
-              <div className="disabled-reason">
-                Waiting for {labelColor(kingGambleDecision.player)} to finish the gamble.
-              </div>
-            )}
-            <div className="stake-grid">
-              {kingDecisionTargets.map((piece) => (
-                <button
-                  type="button"
-                  key={piece.id}
-                  className={selectedKingRecoveryIds.includes(piece.id) ? 'selected-row' : ''}
-                  onClick={() => toggleKingRecovery(piece.id)}
-                  disabled={!canResolveKingGamble}
-                >
-                  <span>{PIECE_GLYPHS[piece.owner][piece.originalType]}</span>
-                  <small>{piece.originalType} {piece.originalSquare}</small>
-                  <b>{recoveryValue(piece)}</b>
-                </button>
-              ))}
-            </div>
-            {!kingDecisionTargets.length && <p className="empty">No legal recovery squares are open.</p>}
-            <div className="stake-total">
-              <span>Selected {kingRecoveryValue}</span>
-              <span>Prize {kingRecoveryBudget}</span>
-            </div>
-            <div className="king-claim-actions">
-              <button
-                type="button"
-                className="primary full"
-                disabled={!kingDecisionReady || !canResolveKingGamble || Boolean(round)}
-                onClick={() => claimKingGambleRecovery()}
-              >
-                Claim pieces and end turn
-              </button>
-              <button
-                type="button"
-                className="full danger-wager"
-                disabled={!canResolveKingGamble || Boolean(round)}
-                onClick={doubleKingGamble}
-              >
-                Gamble again for {kingRecoveryBudget * 2}
-              </button>
-            </div>
-          </section>
-        )}
-
-        {!kingGambleDecision && (
-        <section className="challenge-panel">
-          <div className="panel-heading">
-            <Swords size={18} aria-hidden="true" />
-            <h2>Blackjack Recovery</h2>
-          </div>
-          <p className="small-copy">
-            When behind by 5 or more, recover one or many captured pieces by matching their total value exactly.
-          </p>
-          <div className="usage-meter">
-            <span>{labelColor(currentTurn)} normal blackjack attempts</span>
-            <strong>
-              {normalBlackjackRemaining} / {normalBlackjackLimit}
-            </strong>
-            <small>Used {normalBlackjackUsed}</small>
-          </div>
-
-          {(!blackjackBaseAllowed || (!loneKingMode && !normalBlackjackLimitAvailable)) && (
-            <div className="disabled-reason">
-              {game.status !== 'active'
-                ? 'The game is over.'
-                : playerInCheck
-                  ? 'Your king is in check.'
-                  : blackjackCooldownActive
-                    ? 'Move the king one square before another blackjack.'
-                  : !loneKingMode && !normalBlackjackLimitAvailable
-                    ? 'Normal blackjack limit reached.'
-                  : isLiveRoom && !canAct
-                    ? `Waiting for ${labelColor(currentTurn)} to move.`
-                    : `Need a deficit of at least 5. Current deficit: ${Math.max(0, deficit)}.`}
-            </div>
-          )}
-
-          <div className="target-list">
-            <h3>Captured pieces</h3>
-            {capturedTargets.length ? (
-              capturedTargets.map((piece) => (
-                <button
-                  type="button"
-                  key={piece.id}
-                  className={selectedTargetIds.includes(piece.id) ? 'selected-row' : ''}
-                  onClick={() => toggleTarget(piece.id)}
-                  disabled={!normalBlackjackBaseAllowed || loneKingMode}
-                >
-                  <span>{PIECE_GLYPHS[piece.owner][piece.originalType]}</span>
-                  <strong>{piece.originalType}</strong>
-                  <em>{piece.originalSquare}</em>
-                  <b>{recoveryValue(piece)}</b>
-                </button>
-              ))
-            ) : (
-              <p className="empty">No recoverable captured pieces.</p>
-            )}
-          </div>
-
-          {!loneKingMode && (
-            <div className="stake-list">
-              <h3>Stake active pieces</h3>
-              <div className="stake-grid">
-                {currentActivePieces
-                  .filter((piece) => piece.type !== 'king')
-                  .map((piece) => {
-                    const stakeIsKingSafe = canStakePieceWithoutExposingKing(game, piece, currentTurn);
-                    return (
-                      <button
-                        type="button"
-                        key={piece.id}
-                        className={selectedStakeIds.includes(piece.id) ? 'selected-row' : ''}
-                        onClick={() => toggleStake(piece.id)}
-                        disabled={!normalBlackjackBaseAllowed || !selectedTargets.length || !stakeIsKingSafe}
-                        title={!stakeIsKingSafe ? 'Pinned piece: staking it would expose your king.' : undefined}
-                      >
-                        <span>{PIECE_GLYPHS[piece.owner][piece.type]}</span>
-                        <small>{piece.currentSquare}</small>
-                        <b>{PIECE_VALUES[piece.type]}</b>
-                      </button>
-                    );
-                  })}
-              </div>
-              <div className="stake-total">
-                <span>Stake {stakeTotal}</span>
-                <span>Recovery {targetValue}</span>
-              </div>
-              <button
-                type="button"
-                className="primary full"
-                disabled={!standardChallengeReady || Boolean(round)}
-                onClick={() => beginRound('standard')}
-              >
-                Start challenge
-              </button>
-            </div>
-          )}
-
-          {loneKingMode && (
-            <div className="stake-list">
-              <div className="lone-king-title">
-                <Crown size={18} aria-hidden="true" />
-                <h3>Lone-king blackjack</h3>
-              </div>
-              <p className="small-copy">
-                Risk the crown. Each win adds 2 recovery points; a loss passes the turn. Only checkmate ends the
-                crown.
-              </p>
-              <div className="stake-grid">
-                {kingRecoveryPieces.map((piece) => (
-                  <button
-                    type="button"
-                    key={piece.id}
-                    className={selectedKingRecoveryIds.includes(piece.id) ? 'selected-row' : ''}
-                    onClick={() => toggleKingRecovery(piece.id)}
-                    disabled={!blackjackBaseAllowed}
-                  >
-                    <span>{PIECE_GLYPHS[piece.owner][piece.originalType]}</span>
-                    <small>{piece.originalSquare}</small>
-                    <b>{recoveryValue(piece)}</b>
-                  </button>
-                ))}
-              </div>
-              <div className="stake-total">
-                <span>King staked</span>
-                <span>Opening claim {kingRecoveryValue}/2</span>
-              </div>
-              <button
-                type="button"
-                className="primary full"
-                disabled={!kingChallengeReady || Boolean(round)}
-                onClick={openKingGamble}
-              >
-                The King's Gamble
-              </button>
-            </div>
-          )}
-        </section>
-        )}
-
-      </aside>
+      <SidePanel
+        BlackjackTableComponent={BlackjackTable}
+        beginRound={beginRound}
+        blackjackAvailable={blackjackAvailable}
+        blackjackBaseAllowed={blackjackBaseAllowed}
+        blackjackCooldownActive={blackjackCooldownActive}
+        botColor={botColor}
+        botRating={botRating}
+        botRatings={BOT_RATINGS}
+        canAct={canAct}
+        canControlRound={canControlRound}
+        capturedTargets={capturedTargets}
+        closeResolvedRound={closeResolvedRound}
+        confirmBotRating={confirmBotRating}
+        copyFriendLink={copyFriendLink}
+        copyLinkToClipboard={copyLinkToClipboard}
+        currentActivePieces={currentActivePieces}
+        currentTurn={currentTurn}
+        deficit={deficit}
+        friendOrigin={friendOrigin}
+        game={game}
+        hit={hit}
+        isLiveRoom={isLiveRoom}
+        kingChallengeReady={kingChallengeReady}
+        kingGambleDecision={kingGambleDecision}
+        kingRecoveryPieces={kingRecoveryPieces}
+        kingRecoveryValue={kingRecoveryValue}
+        labelColor={labelColor}
+        loneKingMode={loneKingMode}
+        material={material}
+        message={message}
+        normalBlackjackBaseAllowed={normalBlackjackBaseAllowed}
+        normalBlackjackLimit={normalBlackjackLimit}
+        normalBlackjackLimitAvailable={normalBlackjackLimitAvailable}
+        normalBlackjackRemaining={normalBlackjackRemaining}
+        normalBlackjackUsed={normalBlackjackUsed}
+        openKingGamble={openKingGamble}
+        pendingBotRating={pendingBotRating}
+        pieceGlyphs={PIECE_GLYPHS}
+        pieceValues={PIECE_VALUES}
+        playMode={playMode}
+        playerColor={playerColor}
+        playerInCheck={playerInCheck}
+        recoveryValue={recoveryValue}
+        roomPlayers={roomPlayers}
+        roomStatus={roomStatus}
+        round={round}
+        royalCinematicActive={royalCinematicActive}
+        selectedKingRecoveryIds={selectedKingRecoveryIds}
+        selectedStakeIds={selectedStakeIds}
+        selectedTargetIds={selectedTargetIds}
+        selectedTargets={selectedTargets}
+        setPendingBotRating={setPendingBotRating}
+        shareLink={shareLink}
+        stakeTotal={stakeTotal}
+        stand={stand}
+        standardChallengeReady={standardChallengeReady}
+        targetValue={targetValue}
+        toggleKingRecovery={toggleKingRecovery}
+        toggleStake={toggleStake}
+        toggleTarget={toggleTarget}
+      />
     </main>
   );
 }
