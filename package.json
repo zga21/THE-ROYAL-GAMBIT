@@ -2,6 +2,12 @@
   "name": "the-royal-gambit",
   "version": "0.1.0",
   "private": true,
+  "description": "A React chess variant that combines chess.js, Stockfish-backed bot play, and blackjack-style recovery mechanics.",
+  "homepage": "https://royalgambit.vercel.app/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zga21/THE-ROYAL-GAMBIT.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

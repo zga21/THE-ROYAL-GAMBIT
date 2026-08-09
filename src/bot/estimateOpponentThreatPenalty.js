@@ -38,7 +38,7 @@ export function estimateOpponentThreatPenalty(gameState, color = getTurnColor(ga
 
     return opponentThreatScore * (profile.opponentThreatAwareness ?? 1);
   } catch {
-    // TODO: use the app's full move generator when it is exposed outside App.jsx.
+    // Future extension: use the app's full move generator when it is exposed outside App.jsx.
     return 0;
   }
 }

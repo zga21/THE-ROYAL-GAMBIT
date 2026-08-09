@@ -151,7 +151,7 @@ export function getLegalMovesForColor(gameState, color) {
     const chess = new Chess(fenWithTurn(gameState.chess.fen(), color));
     return chess.moves({ verbose: true });
   } catch {
-    // TODO: use the app's complete legal move helper when it is extracted from App.jsx.
+    // Future extension: use the app's complete legal move helper when it is extracted from App.jsx.
     return [];
   }
 }

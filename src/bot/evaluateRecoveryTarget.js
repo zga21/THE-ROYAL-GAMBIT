@@ -9,6 +9,6 @@ export function recoveredPieceUtility(piece, gameState, profile = {}) {
   if (type === 'knight') score += 25;
   if (type === 'bishop') score += 25;
 
-  // TODO: add mobility-after-recovery, check potential, and tactical disaster checks.
+  // Future extension: add mobility-after-recovery, check potential, and tactical disaster checks.
   return score * (profile.recoveryUtilityAwareness ?? 1);
 }

@@ -51,7 +51,7 @@ function canSafelyReturnPiece(gameState, piece) {
     test.put({ type, color }, piece.originalSquare);
     return !test.isCheckmate();
   } catch {
-    // TODO: replace with full game-rule validation for recovered material.
+    // Future extension: replace with full game-rule validation for recovered material.
     return true;
   }
 }

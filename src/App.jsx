@@ -1696,8 +1696,9 @@ function App() {
           });
           return;
         }
-        // TODO: wire future blackjack action shapes into the existing challenge UI/flow.
-        console.debug('[Royal Gambit bot] Blackjack action could not be started.', botAction);
+        if (import.meta.env.DEV && import.meta.env.VITE_BOT_DEBUG === 'true') {
+          console.debug('[Royal Gambit bot] Blackjack action could not be started.', botAction);
+        }
       }
       if (botAction.move) {
         finishNormalMove(botAction.move, game, `Bot ${botRating}`);

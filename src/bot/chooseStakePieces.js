@@ -39,7 +39,7 @@ export function estimateStakeCost(stake, gameState, profile = {}) {
   const pieces = Array.isArray(stake) ? stake : stake?.pieces ?? [];
   const stakeMaterialValue = pieces.reduce((sum, piece) => sum + pieceValue(piece), 0);
   const stakePositionalImportance = 0;
-  // TODO: add king defender, active piece, passed pawn, and attacking piece penalties.
+  // Future extension: add king defender, active piece, passed pawn, and attacking piece penalties.
   return {
     stakeCost: lostStakeUtility(pieces, gameState, profile) + stakePositionalImportance,
     debug: {

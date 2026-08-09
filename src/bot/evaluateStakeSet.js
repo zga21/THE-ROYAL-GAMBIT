@@ -1,22 +1,22 @@
 import { pieceCentipawnValue } from '../rules/materialValues.js';
 
 function defendsKing() {
-  // TODO: detect piece-specific king defense.
+  // Future extension: detect piece-specific king defense.
   return false;
 }
 
 function defendsQueen() {
-  // TODO: detect queen defense and tactical overload.
+  // Future extension: detect queen defense and tactical overload.
   return false;
 }
 
 function isPinned() {
-  // TODO: reuse stake-safety ray checks to grade pinned-but-legal pieces.
+  // Future extension: reuse stake-safety ray checks to grade pinned-but-legal pieces.
   return false;
 }
 
 function isTrapped() {
-  // TODO: detect trapped/low-mobility pieces.
+  // Future extension: detect trapped/low-mobility pieces.
   return false;
 }
 
