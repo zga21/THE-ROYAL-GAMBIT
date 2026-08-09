@@ -184,10 +184,6 @@ The test suite covers core rule and bot-decision helpers:
 - Pinned stake safety
 - Piece recovery rules
 
-## Security
-
-The repository includes [SECURITY.md](SECURITY.md), which documents environment-variable handling and the multiplayer room-sync safeguards.
-
 ## Roadmap
 
 - Add an in-app rules reference
