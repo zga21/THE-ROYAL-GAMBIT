@@ -3,6 +3,7 @@ import { Chess } from 'chess.js';
 import {
   Bot,
   Crown,
+  Github,
   RotateCcw,
   RotateCw,
   Spade,
@@ -104,6 +105,8 @@ const THEMES = [
   { id: 'pink', label: 'Pink & White' },
   { id: 'orange', label: 'Orange & Black' },
 ];
+
+const GITHUB_URL = 'https://github.com/zga21/THE-ROYAL-GAMBIT';
 const CARD_SUITS = ['♠', '♥', '♦', '♣'];
 const CARD_RANKS = [
   { label: 'A', value: 11 },
@@ -2428,6 +2431,17 @@ function App() {
                 ))}
               </select>
             </label>
+            <a
+              className="github-button"
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open The Royal Gambit source code on GitHub"
+              title="View source on GitHub"
+            >
+              <Github size={18} aria-hidden="true" />
+              <span>GitHub</span>
+            </a>
             <div className="mode-toggle" aria-label="Play mode">
               <button
                 type="button"

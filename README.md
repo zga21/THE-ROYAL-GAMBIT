@@ -2,7 +2,10 @@
 
 The Royal Gambit is a browser-based chess variant that combines standard chess with a blackjack recovery mechanic. It is built with React, Vite, and chess.js, with a Stockfish-backed bot and online friend rooms.
 
-Live demo: https://royalgambit.vercel.app/
+## Links
+
+- Live demo: https://royalgambit.vercel.app/
+- Source code: https://github.com/zga21/THE-ROYAL-GAMBIT
 
 ## Overview
 
@@ -188,4 +191,3 @@ The test suite covers core rule and bot-decision helpers:
 - Add match history and game review tools
 - Improve mobile controls and board animations
 - Add more bot personalities on top of rating levels
-

@@ -153,7 +153,8 @@ button {
 
 .mode-toggle button,
 .link-button,
-.copy-link-button {
+.copy-link-button,
+.github-button {
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -166,6 +167,7 @@ button {
   gap: 6px;
   font-weight: 800;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .mode-toggle button.active,
@@ -183,6 +185,21 @@ button {
   border: 1px solid rgba(180, 127, 46, 0.45);
   background: #171311;
   color: #e8d7aa;
+}
+
+.github-button {
+  border: 1px solid var(--panel-border);
+  min-height: 44px;
+  border-radius: 8px;
+  background: var(--panel-bg-strong);
+  color: var(--text-main);
+}
+
+.github-button:hover,
+.github-button:focus-visible {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent-strong) 24%, transparent);
+  outline: none;
 }
 
 .eyebrow {
