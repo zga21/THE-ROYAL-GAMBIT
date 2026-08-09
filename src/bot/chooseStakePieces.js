@@ -1,5 +1,6 @@
 import { getTurnColor, pieceValue } from './chooseRecoveryTarget.js';
 import { canStakePieceWithoutExposingKing } from '../rules/stakeSafety.js';
+import { lostStakeUtility } from './evaluateStakeSet.js';
 
 export function getLegalStakePieces(gameState, color = getTurnColor(gameState)) {
   return (gameState?.pieces ?? [])
@@ -40,9 +41,10 @@ export function estimateStakeCost(stake, gameState, profile = {}) {
   const stakePositionalImportance = 0;
   // TODO: add king defender, active piece, passed pawn, and attacking piece penalties.
   return {
-    stakeCost: stakeMaterialValue * (profile.stakeAwareness ?? 1) + stakePositionalImportance,
+    stakeCost: lostStakeUtility(pieces, gameState, profile) + stakePositionalImportance,
     debug: {
       stakeMaterialValue,
+      stakeMaterialCentipawns: stakeMaterialValue * 100,
       stakePositionalImportance,
     },
   };

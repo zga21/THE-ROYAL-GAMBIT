@@ -1,9 +1,13 @@
 import { getBlackjackOdds } from '../blackjack/blackjackOdds.js';
+import { materialDeficitCentipawns } from '../rules/materialValues.js';
 import {
   getNormalBlackjackLimit,
   getNormalBlackjackRemaining,
   getNormalBlackjackUsed,
 } from '../rules/blackjackLimits.js';
+import { desperationBonus } from './desperation.js';
+import { recoveredPieceUtility } from './evaluateRecoveryTarget.js';
+import { lostStakeUtility } from './evaluateStakeSet.js';
 import {
   getLegalRecoveryOptions,
   getMaterialDeficit,
@@ -39,6 +43,9 @@ function unavailable(reason, extra = {}) {
 export function evaluateBestBlackjackOption(gameState, profile) {
   const color = getTurnColor(gameState);
   const materialDeficit = getMaterialDeficit(gameState, color);
+  const materialDeficitCp = materialDeficitCentipawns(gameState?.pieces, color, (side) =>
+    side === 'white' ? 'black' : 'white',
+  );
   const attemptsRemaining = getNormalBlackjackRemaining(gameState, color);
   const attemptsUsed = getNormalBlackjackUsed(gameState, color);
   const attemptLimit = getNormalBlackjackLimit(gameState, color);
@@ -56,7 +63,7 @@ export function evaluateBestBlackjackOption(gameState, profile) {
     });
   }
 
-  if (materialDeficit < 5) {
+  if (materialDeficitCp < 500) {
     return unavailable('material deficit below blackjack threshold', {
       materialDeficit,
       attemptsRemaining,
@@ -92,15 +99,18 @@ export function evaluateBestBlackjackOption(gameState, profile) {
     return unavailable('no legal recovery targets', { materialDeficit, odds, attemptsRemaining, attemptsUsed, attemptLimit });
   }
 
-  const skipTurnCost = estimateSkipTurnCost(gameState, color, profile);
-  const opponentThreatPenalty = estimateOpponentThreatPenalty(gameState, color, profile);
-  const deficitPressure = materialDeficit * (profile.blackjackRiskTolerance ?? 0);
+  const skipTurnPenalty = estimateSkipTurnCost(gameState, color, profile) * 100;
+  const opponentThreatPenalty = estimateOpponentThreatPenalty(gameState, color, profile) * 100;
+  const kingSafetyPenalty = isInCheck(gameState) ? 10000 : 0;
+  const deficitPressure = materialDeficitCp * (profile.blackjackRiskTolerance ?? 0);
+  const desperation = desperationBonus(materialDeficitCp, profile);
   const blackjackUseBias = profile.blackjackUseBias ?? 0;
   const scarcityRatio = attemptLimit > 0 ? (attemptsUsed + 1) / attemptLimit : 1;
   const resourceCost =
     (profile.blackjackResourceDiscipline ?? 0) *
     Math.pow(scarcityRatio, profile.blackjackScarcityExponent ?? 1) *
-    (profile.blackjackRemainingAwareness ?? 1);
+    (profile.blackjackRemainingAwareness ?? 1) *
+    100;
 
   let best = null;
   const allOptions = [];
@@ -111,11 +121,17 @@ export function evaluateBestBlackjackOption(gameState, profile) {
 
     if (!stake) continue;
 
+    const winValue = recoveredPieceUtility(target, gameState, profile);
+    const lossValue = -lostStakeUtility(stake.pieces, gameState, profile);
+    const tieValue = -20;
     const baseEV =
-      odds.winRate * recovery.recoveryUtility -
-      odds.lossRate * stake.stakeCost -
-      skipTurnCost -
-      opponentThreatPenalty +
+      odds.winRate * winValue +
+      odds.tieRate * tieValue +
+      odds.lossRate * lossValue -
+      skipTurnPenalty -
+      opponentThreatPenalty -
+      kingSafetyPenalty +
+      desperation +
       deficitPressure +
       blackjackUseBias;
     const adjustedEV = baseEV - resourceCost;
@@ -125,6 +141,7 @@ export function evaluateBestBlackjackOption(gameState, profile) {
       mode: 'standard',
       ev: baseEV,
       adjustedEV,
+      score: adjustedEV,
       resourceCost,
       target,
       stake,
@@ -133,12 +150,21 @@ export function evaluateBestBlackjackOption(gameState, profile) {
       attemptsUsed,
       attemptLimit,
       debug: {
+        winValue,
+        lossValue,
+        tieValue,
+        winRate: odds.winRate,
+        lossRate: odds.lossRate,
+        tieRate: odds.tieRate,
         recoveryUtility: recovery.recoveryUtility,
         recoveryDebug: recovery.debug,
         stakeCost: stake.stakeCost,
         stakeDebug: stake.debug,
-        skipTurnCost,
+        skipTurnCost: skipTurnPenalty,
+        skipTurnPenalty,
         opponentThreatPenalty,
+        kingSafetyPenalty,
+        desperationBonus: desperation,
         deficitPressure,
         blackjackUseBias,
         resourceCost,
@@ -146,6 +172,7 @@ export function evaluateBestBlackjackOption(gameState, profile) {
         blackjackScarcityExponent: profile.blackjackScarcityExponent,
         blackjackRemainingAwareness: profile.blackjackRemainingAwareness,
         materialDeficit,
+        materialDeficitCentipawns: materialDeficitCp,
       },
     };
 

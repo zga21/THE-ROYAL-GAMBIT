@@ -147,7 +147,9 @@ function StatusPanel(props) {
       {game.status !== 'active' && (
         <p className="notice">
           <BadgeAlert size={16} aria-hidden="true" />
-          Game status: {game.status}.
+          {game.drawReason === 'threefold-repetition'
+            ? 'Draw by threefold repetition.'
+            : `Game status: ${game.status}.`}
         </p>
       )}
       {playerInCheck && game.status === 'active' && (

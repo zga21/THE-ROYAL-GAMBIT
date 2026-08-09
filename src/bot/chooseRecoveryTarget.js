@@ -1,4 +1,6 @@
 import { Chess } from 'chess.js';
+import { pieceSimpleValue } from '../rules/materialValues.js';
+import { recoveredPieceUtility } from './evaluateRecoveryTarget.js';
 
 export const BOT_PIECE_VALUES = {
   pawn: 1,
@@ -18,7 +20,7 @@ export function opposite(color) {
 }
 
 export function pieceValue(piece) {
-  return BOT_PIECE_VALUES[piece?.originalType ?? piece?.type] ?? 0;
+  return pieceSimpleValue(piece);
 }
 
 export function pieceAt(pieces, square) {
@@ -70,9 +72,8 @@ export function scoreRecoveryTarget(target, gameState, profile) {
   const value = pieceValue(target);
   const returnSquareUtility = 0;
   const tacticalRecoveryBonus = 0;
-  const queenBias = target?.originalType === 'queen' || target?.type === 'queen' ? profile.queenBias ?? 0 : 0;
-  const recoveryUtility =
-    value * (profile.recoveryUtilityAwareness ?? 1) + returnSquareUtility + tacticalRecoveryBonus + queenBias;
+  const queenBias = target?.originalType === 'queen' || target?.type === 'queen' ? (profile.queenBias ?? 0) * 100 : 0;
+  const recoveryUtility = recoveredPieceUtility(target, gameState, profile) + returnSquareUtility + tacticalRecoveryBonus + queenBias;
 
   return {
     target,

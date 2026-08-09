@@ -27,6 +27,11 @@ import {
   normalizeBlackjackUsage,
   recordNormalBlackjackUse,
 } from './rules/blackjackLimits.js';
+import {
+  createInitialPositionHistory,
+  normalizePositionHistory,
+  recordPositionAndApplyDraw,
+} from './rules/repetition.js';
 import { areStakePiecesKingSafe, canStakePieceWithoutExposingKing } from './rules/stakeSafety.js';
 
 const PIECE_VALUES = {
@@ -455,13 +460,18 @@ function evaluateAfterBlackjack(chess, nextColor) {
 
 function initialGameState() {
   const chess = new Chess();
-  return {
+  const game = {
     chess,
     pieces: createInitialPieces(),
     status: 'active',
     protection: { pieceIds: [], protectedAgainst: null },
     kingGamble: normalizeKingGambleTracker(),
     blackjackUsage: normalizeBlackjackUsage(),
+    drawReason: null,
+  };
+  return {
+    ...game,
+    positionHistory: createInitialPositionHistory(game),
   };
 }
 
@@ -473,6 +483,8 @@ function stateForUrl(game, mode, botRating) {
     protection: game.protection,
     kingGamble: normalizeKingGambleTracker(game.kingGamble),
     blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
+    positionHistory: game.positionHistory,
+    drawReason: game.drawReason ?? null,
     mode,
     botRating,
   };
@@ -486,17 +498,24 @@ function serializeGame(game) {
     protection: game.protection,
     kingGamble: normalizeKingGambleTracker(game.kingGamble),
     blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
+    positionHistory: game.positionHistory,
+    drawReason: game.drawReason ?? null,
   };
 }
 
 function hydrateGame(serialized) {
-  return {
+  const game = {
     chess: new Chess(serialized.fen),
     pieces: serialized.pieces,
     status: serialized.status,
     protection: serialized.protection ?? { pieceIds: [], protectedAgainst: null },
     kingGamble: normalizeKingGambleTracker(serialized.kingGamble),
     blackjackUsage: normalizeBlackjackUsage(serialized.blackjackUsage),
+    drawReason: serialized.drawReason ?? null,
+  };
+  return {
+    ...game,
+    positionHistory: normalizePositionHistory(serialized.positionHistory, game),
   };
 }
 
@@ -518,6 +537,12 @@ function decodeShareState() {
         status: parsed.status,
         protection: parsed.protection ?? { pieceIds: [], protectedAgainst: null },
         kingGamble: normalizeKingGambleTracker(parsed.kingGamble),
+        blackjackUsage: normalizeBlackjackUsage(parsed.blackjackUsage),
+        drawReason: parsed.drawReason ?? null,
+        positionHistory: normalizePositionHistory(parsed.positionHistory, {
+          chess: new Chess(parsed.fen),
+          protection: parsed.protection ?? { pieceIds: [], protectedAgainst: null },
+        }),
       },
       mode: parsed.mode === 'bot' ? 'bot' : 'friend',
       botRating: BOT_RATINGS.includes(parsed.botRating) ? parsed.botRating : 800,
@@ -554,6 +579,47 @@ function getSeatFromUrl() {
 function makeRoomId() {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function shouldUseHttpRoomSync() {
+  if (typeof window === 'undefined') return false;
+  return window.location.protocol === 'https:' || window.location.hostname.endsWith('vercel.app');
+}
+
+function getRoomClientId() {
+  if (typeof window === 'undefined') return 'server';
+  const key = 'royalGambitRoomClientId';
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+
+  const clientId = crypto.randomUUID ? crypto.randomUUID() : makeRoomId();
+  window.localStorage.setItem(key, clientId);
+  return clientId;
+}
+
+async function postRoomPayload(payload) {
+  const response = await fetch('/api/room', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Room sync failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function pullRoomPayload(roomId, clientId) {
+  const params = new URLSearchParams({ roomId, clientId });
+  const response = await fetch(`/api/room?${params.toString()}`);
+
+  if (!response.ok) {
+    throw new Error(`Room poll failed: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 function sharedStatePayload(game, playMode, botRating, message, round, kingGambleDecision) {
@@ -1281,6 +1347,7 @@ function App() {
     return THEMES.some((item) => item.id === savedTheme) ? savedTheme : 'royal';
   });
   const socketRef = useRef(null);
+  const httpRoomRef = useRef({ enabled: false, clientId: null, pollTimer: null, version: 0 });
   const applyingRemoteRef = useRef(false);
   const broadcastTimerRef = useRef(null);
   const cinematicTimersRef = useRef([]);
@@ -1409,19 +1476,98 @@ function App() {
     window.localStorage.setItem('royalGambitTheme', theme);
   }, [theme]);
 
+  function applyRemoteRoomPayload(payload) {
+    if (payload.role) setPlayerColor(payload.role);
+    if (Number.isFinite(payload.version)) httpRoomRef.current.version = payload.version;
+    setRoomPlayers((count) => payload.clientCount ?? count);
+    if (payload.type !== 'room-state' || !payload.state) return;
+
+    applyingRemoteRef.current = true;
+    const hydrated = hydrateSharedState(payload.state);
+    setGame(hydrated.game);
+    setPlayMode('friend');
+    setBotRating(hydrated.botRating);
+    setPendingBotRating(hydrated.botRating);
+    setRound(hydrated.round);
+    setKingGambleDecision(hydrated.kingGambleDecision);
+    setMessage(hydrated.message);
+    setPendingPromotion(null);
+    window.setTimeout(() => {
+      applyingRemoteRef.current = false;
+    }, 0);
+  }
+
   useEffect(() => {
     if (playMode !== 'friend' || !roomId) {
       socketRef.current?.close();
       socketRef.current = null;
+      window.clearTimeout(httpRoomRef.current.pollTimer);
+      httpRoomRef.current = { enabled: false, clientId: null, pollTimer: null, version: 0 };
       setRoomStatus(roomId ? 'offline' : 'offline');
       setPlayerColor(null);
       setRoomPlayers(0);
       return undefined;
     }
 
+    if (shouldUseHttpRoomSync()) {
+      let cancelled = false;
+      const clientId = getRoomClientId();
+      httpRoomRef.current = { enabled: true, clientId, pollTimer: null, version: 0 };
+      socketRef.current?.close();
+      socketRef.current = null;
+      setRoomStatus('connecting');
+
+      const schedulePoll = () => {
+        window.clearTimeout(httpRoomRef.current.pollTimer);
+        httpRoomRef.current.pollTimer = window.setTimeout(async () => {
+          if (cancelled) return;
+          try {
+            const payload = await pullRoomPayload(roomId, clientId);
+            if (cancelled) return;
+            setRoomStatus('connected');
+            if ((payload.version ?? 0) !== httpRoomRef.current.version) {
+              applyRemoteRoomPayload(payload);
+            } else {
+              if (payload.role) setPlayerColor(payload.role);
+              setRoomPlayers((count) => payload.clientCount ?? count);
+            }
+          } catch {
+            if (!cancelled) setRoomStatus('offline');
+          } finally {
+            if (!cancelled) schedulePoll();
+          }
+        }, 1200);
+      };
+
+      postRoomPayload({
+        type: 'join',
+        roomId,
+        clientId,
+        requestedRole: playerColor,
+        state: sharedStatePayload(game, 'friend', botRating, message, round, kingGambleDecision),
+      })
+        .then((payload) => {
+          if (cancelled) return;
+          setRoomStatus('connected');
+          applyRemoteRoomPayload(payload);
+          schedulePoll();
+        })
+        .catch(() => {
+          if (!cancelled) setRoomStatus('offline');
+          schedulePoll();
+        });
+
+      return () => {
+        cancelled = true;
+        window.clearTimeout(httpRoomRef.current.pollTimer);
+        httpRoomRef.current = { enabled: false, clientId: null, pollTimer: null, version: 0 };
+      };
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
     socketRef.current = socket;
+    httpRoomRef.current = { enabled: false, clientId: null, pollTimer: null, version: 0 };
     setRoomStatus('connecting');
 
     socket.addEventListener('open', () => {
@@ -1442,22 +1588,7 @@ function App() {
         setRoomPlayers(payload.clientCount ?? 0);
         return;
       }
-      if (payload.type !== 'room-state' || !payload.state) return;
-      if (payload.role) setPlayerColor(payload.role);
-      setRoomPlayers((count) => payload.clientCount ?? count);
-      applyingRemoteRef.current = true;
-      const hydrated = hydrateSharedState(payload.state);
-      setGame(hydrated.game);
-      setPlayMode('friend');
-      setBotRating(hydrated.botRating);
-      setPendingBotRating(hydrated.botRating);
-      setRound(hydrated.round);
-      setKingGambleDecision(hydrated.kingGambleDecision);
-      setMessage(hydrated.message);
-      setPendingPromotion(null);
-      window.setTimeout(() => {
-        applyingRemoteRef.current = false;
-      }, 0);
+      applyRemoteRoomPayload(payload);
     });
 
     socket.addEventListener('close', () => {
@@ -1475,16 +1606,26 @@ function App() {
 
   useEffect(() => {
     if (playMode !== 'friend' || !roomId || applyingRemoteRef.current) return undefined;
-    if (socketRef.current?.readyState !== WebSocket.OPEN) return undefined;
+    const canUseSocket = socketRef.current?.readyState === WebSocket.OPEN;
+    const canUseHttp = httpRoomRef.current.enabled && httpRoomRef.current.clientId;
+    if (!canUseSocket && !canUseHttp) return undefined;
 
     window.clearTimeout(broadcastTimerRef.current);
     broadcastTimerRef.current = window.setTimeout(() => {
-      socketRef.current?.send(
-        JSON.stringify({
-          type: 'sync',
-          state: sharedStatePayload(game, 'friend', botRating, message, round, kingGambleDecision),
-        }),
-      );
+      const state = sharedStatePayload(game, 'friend', botRating, message, round, kingGambleDecision);
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ type: 'sync', state }));
+        return;
+      }
+
+      const { clientId } = httpRoomRef.current;
+      postRoomPayload({ type: 'sync', roomId, clientId, state })
+        .then((payload) => {
+          if (Number.isFinite(payload.version)) httpRoomRef.current.version = payload.version;
+          setRoomStatus('connected');
+          setRoomPlayers((count) => payload.clientCount ?? count);
+        })
+        .catch(() => setRoomStatus('offline'));
     }, 25);
 
     return () => window.clearTimeout(broadcastTimerRef.current);
@@ -1527,18 +1668,31 @@ function App() {
 
   useEffect(() => {
     if (!isBotTurn) return undefined;
+    let cancelled = false;
     setSelectedSquare(null);
     setMessage(`Bot ${botRating} is thinking.`);
-    const timer = window.setTimeout(() => {
-      const botAction = chooseBotAction(game, botRating);
+    const timer = window.setTimeout(async () => {
+      const botAction = await chooseBotAction(game, botRating);
+      if (cancelled) return;
       if (botAction.type === 'blackjack') {
-        const targets = Array.isArray(botAction.target) ? botAction.target : [botAction.target].filter(Boolean);
-        const stakes = Array.isArray(botAction.stake) ? botAction.stake : botAction.stake?.pieces ?? [];
+        const targets =
+          botAction.mode === 'king'
+            ? botAction.targets ?? []
+            : Array.isArray(botAction.target)
+              ? botAction.target
+              : [botAction.target].filter(Boolean);
+        const stakes =
+          botAction.mode === 'king'
+            ? game.pieces.filter((piece) => piece.owner === botColor && piece.type === 'king' && !piece.isCaptured)
+            : Array.isArray(botAction.stake)
+              ? botAction.stake
+              : botAction.stake?.pieces ?? [];
         if (targets.length && stakes.length) {
           beginRound(botAction.mode ?? 'standard', {
             player: botColor,
             targets,
             stakes,
+            budget: botAction.budget,
           });
           return;
         }
@@ -1549,7 +1703,10 @@ function App() {
         finishNormalMove(botAction.move, game, `Bot ${botRating}`);
       }
     }, 450);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [isBotTurn, game, botRating]);
 
   useEffect(() => {
@@ -1678,14 +1835,17 @@ function App() {
     const nextPieces = applyMoveToPieces(sourceGame.pieces, played);
     const nextProtection = clearProtectionAfterMove(sourceGame.protection, movingColor);
     const status = statusFromChess(nextChess);
-    setGame({
+    const nextGame = recordPositionAndApplyDraw({
       chess: nextChess,
       pieces: nextPieces,
       status,
       protection: nextProtection,
       kingGamble: clearKingGambleCooldownAfterMove(sourceGame.kingGamble, movingColor, played),
       blackjackUsage: normalizeBlackjackUsage(sourceGame.blackjackUsage),
+      positionHistory: sourceGame.positionHistory,
+      drawReason: null,
     });
+    setGame(nextGame);
     setSelectedSquare(null);
     setPendingPromotion(null);
     setSelectedStakeIds([]);
@@ -1695,9 +1855,10 @@ function App() {
 
     const nextTurn = COLOR_FROM_CHESS[nextChess.turn()];
     const prefix = actorLabel ? `${actorLabel} played ${played.san}. ` : '';
-    if (status === 'checkmate') setMessage(`${prefix}${labelColor(movingColor)} wins by checkmate.`);
-    else if (status === 'stalemate') setMessage('Stalemate.');
-    else if (status === 'draw') setMessage('Draw.');
+    if (nextGame.status === 'checkmate') setMessage(`${prefix}${labelColor(movingColor)} wins by checkmate.`);
+    else if (nextGame.status === 'stalemate') setMessage('Stalemate.');
+    else if (nextGame.drawReason === 'threefold-repetition') setMessage('Draw by threefold repetition.');
+    else if (nextGame.status === 'draw') setMessage('Draw.');
     else if (nextChess.isCheck()) setMessage(`${prefix}${labelColor(nextTurn)} is in check.`);
     else setMessage(`${prefix}${labelColor(nextTurn)} to move.`);
   }
@@ -1991,7 +2152,7 @@ function App() {
     }
 
     const evaluated = evaluateAfterBlackjack(nextChess, nextColor);
-    setGame({
+    const nextGame = recordPositionAndApplyDraw({
       chess: evaluated.chess,
       pieces: nextPieces,
       status: evaluated.status,
@@ -2001,7 +2162,10 @@ function App() {
       },
       kingGamble: resetKingGambleCooldown(game.kingGamble, player),
       blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
+      positionHistory: game.positionHistory,
+      drawReason: null,
     });
+    setGame(nextGame);
     setCinematicPhase('recoveryAnimation');
     setKingGambleIntro(false);
     setShareLink('');
@@ -2153,14 +2317,17 @@ function App() {
       ? { chess: passTurnChess(nextChess, nextColor), status: statusOverride }
       : evaluateAfterBlackjack(nextChess, nextColor);
 
-    setGame({
+    const nextGame = recordPositionAndApplyDraw({
       chess: evaluated.chess,
       pieces: nextPieces,
       status: evaluated.status,
       protection: result === 'win' ? nextProtection : { pieceIds: [], protectedAgainst: null },
       kingGamble: nextKingGamble,
       blackjackUsage: normalizeBlackjackUsage(game.blackjackUsage),
+      positionHistory: game.positionHistory,
+      drawReason: null,
     });
+    setGame(nextGame);
     setSelectedTargetIds([]);
     setSelectedStakeIds([]);
     setSelectedKingRecoveryIds([]);
@@ -2178,6 +2345,8 @@ function App() {
       setMessage(`${labelColor(player)} wins by checkmate.`);
     } else if (evaluated.status === 'stalemate') {
       setMessage('Stalemate.');
+    } else if (nextGame.drawReason === 'threefold-repetition') {
+      setMessage('Draw by threefold repetition.');
     } else if (evaluated.status === 'draw') {
       setMessage('Draw.');
     } else if (resolvedRound.mode === 'king' && result === 'lose') {

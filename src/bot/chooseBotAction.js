@@ -1,109 +1,75 @@
 import { getBotProfile } from './botProfiles.js';
+import { buildBotAction } from './buildBotAction.js';
+import { buildBotDecisionDebug, logBotDecision } from './botDecisionDebug.js';
 import { evaluateBestBlackjackOption } from './evaluateBlackjackOption.js';
-import { evaluateBestChessMove } from './evaluateChessMove.js';
+import { evaluateKingGambleOption } from './evaluateKingGambleOption.js';
+import { evaluateBestStockfishMove } from './evaluateStockfishMove.js';
+import { stockfishResultToScore } from './normaliseDecisionScores.js';
 
-const BOT_DEBUG_ENABLED = Boolean(import.meta.env?.DEV && import.meta.env?.VITE_BOT_DEBUG === 'true');
-
-function selectedMoveName(bestChessMove) {
-  return bestChessMove.move?.san ?? `${bestChessMove.move?.from ?? '?'}-${bestChessMove.move?.to ?? '?'}`;
-}
-
-function recoveryTargetName(target) {
-  if (!target) return undefined;
-  return target.originalType ?? target.type ?? target.id;
-}
-
-export function chooseBotAction(gameState, profileIdOrElo) {
+export async function chooseBotAction(gameState, profileIdOrElo) {
   const profile = getBotProfile(profileIdOrElo);
-  const bestChessMove = evaluateBestChessMove(gameState, profile);
+  const bestChessMove = await evaluateBestStockfishMove(gameState, profile);
+  const chessScore = stockfishResultToScore(bestChessMove, profile);
   const blackjackOption = evaluateBestBlackjackOption(gameState, profile);
-  const blackjackThreshold = profile.blackjackThreshold ?? 0;
-  const blackjackScore = blackjackOption.adjustedEV ?? blackjackOption.ev;
-  const decisionMargin = blackjackScore - bestChessMove.score - blackjackThreshold;
-  const shouldUseBlackjack = blackjackOption.available && decisionMargin > 0;
-  const selectedAction = shouldUseBlackjack ? 'blackjack' : 'move';
-  const selected = bestChessMove.debug?.selectedMove ?? {};
-  const bestRaw = bestChessMove.debug?.bestRawMove ?? {};
+  const kingGamble = evaluateKingGambleOption(gameState, profile);
+  const candidates = [
+    {
+      type: 'move',
+      mode: 'chess',
+      score: chessScore,
+      payload: { ...bestChessMove, score: chessScore },
+    },
+  ];
 
-  if (BOT_DEBUG_ENABLED) {
-    console.table([
-      {
-        selectedAction,
-        elo: profile.approxElo,
-        skill: profile.skill,
-        chessScore: bestChessMove?.score,
-        blackjackBaseEV: blackjackOption?.ev,
-        blackjackAdjustedEV: blackjackOption?.adjustedEV,
-        blackjackThreshold,
-        decisionMargin,
-        blackjackAvailable: blackjackOption?.available,
-        unavailableReason: blackjackOption?.reason,
-        attemptsUsed: blackjackOption?.attemptsUsed,
-        attemptsRemaining: blackjackOption?.attemptsRemaining,
-        attemptLimit: blackjackOption?.attemptLimit,
-        resourceCost: blackjackOption?.resourceCost,
-        blackjackResourceDiscipline: profile.blackjackResourceDiscipline,
-        blackjackScarcityExponent: profile.blackjackScarcityExponent,
-        blackjackRemainingAwareness: profile.blackjackRemainingAwareness,
-        blackjackSims: profile.blackjackSims,
-        blackjackStrategy: profile.blackjackStrategy,
-        winRate: blackjackOption?.odds?.winRate,
-        lossRate: blackjackOption?.odds?.lossRate,
-        tieRate: blackjackOption?.odds?.tieRate,
-        recoveryTarget: recoveryTargetName(blackjackOption?.target),
-        recoveryUtility: blackjackOption?.debug?.recoveryUtility,
-        stakeValue: blackjackOption?.stake?.totalValue,
-        stakeCost: blackjackOption?.debug?.stakeCost,
-        skipTurnCost: blackjackOption?.debug?.skipTurnCost,
-        opponentThreatPenalty: blackjackOption?.debug?.opponentThreatPenalty,
-        deficitPressure: blackjackOption?.debug?.deficitPressure,
-        blackjackUseBias: blackjackOption?.debug?.blackjackUseBias,
-        selectedMove: selectedMoveName(bestChessMove),
-        bestRawMove: bestRaw.move?.san ?? `${bestRaw.move?.from ?? '?'}-${bestRaw.move?.to ?? '?'}`,
-        finalScore: selected.totalScore,
-        materialScore: selected.materialScore,
-        netCaptureValue: selected.netCaptureValue,
-        recaptureRisk: selected.recaptureRisk,
-        opponentReplyPenalty: selected.opponentReplyPenalty,
-        opponentBestReplyValue: selected.opponentBestReplyValue,
-        hangingPenalty: selected.hangingPenalty,
-        givesCheck: selected.givesCheck,
-        givesCheckmate: selected.givesCheckmate,
-        allowsMateInOne: selected.allowsMateInOne,
-        temperature: bestChessMove.debug?.temperature,
-        usedSoftmax: bestChessMove.debug?.usedSoftmax,
-      },
-    ]);
-  }
-
-  if (shouldUseBlackjack) {
-    return {
+  if (blackjackOption.available) {
+    candidates.push({
       type: 'blackjack',
-      mode: blackjackOption.mode,
-      target: blackjackOption.target,
-      stake: blackjackOption.stake,
-      ev: blackjackOption.ev,
-      adjustedEV: blackjackOption.adjustedEV,
-      profileId: profile.id,
-      debug: {
-        profile,
-        bestChessMove,
-        blackjackOption,
-        decisionMargin,
-      },
-    };
+      mode: 'standard',
+      score: blackjackOption.adjustedEV ?? blackjackOption.score,
+      payload: blackjackOption,
+    });
   }
 
-  return {
-    type: 'move',
-    move: bestChessMove.move,
-    score: bestChessMove.score,
-    profileId: profile.id,
+  if (kingGamble.available) {
+    candidates.push({
+      type: 'blackjack',
+      mode: 'king',
+      score: kingGamble.adjustedEV ?? kingGamble.score,
+      payload: kingGamble,
+    });
+  }
+
+  const blackjackCandidates = candidates
+    .filter((candidate) => candidate.type === 'blackjack')
+    .sort((a, b) => b.score - a.score);
+  const bestBlackjack = blackjackCandidates[0] ?? null;
+  const riskMargin = profile.riskTolerance ?? 0;
+  const chosen =
+    bestBlackjack && bestBlackjack.score > chessScore + riskMargin
+      ? bestBlackjack
+      : candidates[0];
+  const sortedCandidates = [...candidates].sort((a, b) => b.score - a.score);
+  const debug = buildBotDecisionDebug({
+    chosen,
+    profile,
+    chess: { ...bestChessMove, score: chessScore },
+    normalBlackjack: blackjackOption,
+    kingGamble,
+    candidates: sortedCandidates.map(({ type, mode, score }) => ({ type, mode, score })),
+  });
+
+  logBotDecision(debug);
+
+  return buildBotAction(chosen, {
+    profile,
     debug: {
+      ...debug,
       profile,
       bestChessMove,
-      blackjackOption,
-      decisionMargin,
+      normalBlackjack: blackjackOption,
+      kingGamble,
+      decisionMargin: chosen.score - chessScore,
+      riskMargin,
     },
-  };
+  });
 }
