@@ -40,6 +40,10 @@ async function redisCommand(parts) {
     return response.json();
   }
 
+  if (parts[0] !== 'get') {
+    throw new Error('redis-command-failed');
+  }
+
   const fallback = await fetch(`${redisUrl}/${parts.map((part) => encodeURIComponent(String(part))).join('/')}`, {
     headers: {
       Authorization: `Bearer ${redisToken}`,
@@ -47,7 +51,7 @@ async function redisCommand(parts) {
   });
 
   if (!fallback.ok) {
-    throw new Error(`Redis command failed: ${response.status}`);
+    throw new Error('redis-command-failed');
   }
 
   return fallback.json();
